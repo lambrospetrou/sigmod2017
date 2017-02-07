@@ -2,4 +2,4 @@
 
 DIR=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
 
-pushd $DIR && go build ; popd
+pushd $DIR/src && go build -o goimpl ; popd
