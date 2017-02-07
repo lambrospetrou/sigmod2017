@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"runtime"
 	"sort"
@@ -93,12 +94,8 @@ func printResults(results []Result) {
 	fmt.Println()
 }
 
-func queryDoc(ngrams []Ngram, doc string) {
-	doc = " " + doc + " "
-	results := make([]Result, 0, 100)
-
-	//fmt.Fprintln(os.Stderr, "queryDoc", len(ngrams))
-
+func partialQueryDoc(ngrams []Ngram, doc string) []Result {
+	results := make([]Result, 0, 32)
 	for _, ngram := range ngrams {
 		if !ngram.Valid {
 			continue
@@ -108,6 +105,44 @@ func queryDoc(ngrams []Ngram, doc string) {
 		if pos != -1 {
 			results = append(results, Result{ngram, pos})
 		}
+	}
+	return results
+}
+
+func queryDoc(ngrams []Ngram, doc string) {
+	doc = " " + doc + " "
+	//fmt.Fprintln(os.Stderr, "queryDoc", len(ngrams))
+
+	//results := partialQueryDoc(ngrams, doc)
+
+	cores := runtime.NumCPU()
+	chans := make([]chan []Result, 0, cores+1)
+
+	sz := len(ngrams)
+	start := 0
+	batchSz := int(sz / cores)
+	//var wg sync.WaitGroup
+	for start < sz {
+		//wg.Add(1)
+
+		end := int(math.Min(float64(start+batchSz), float64(sz)))
+
+		chRes := make(chan []Result)
+		chans = append(chans, chRes)
+
+		go func(ngs []Ngram, partialDoc string, chOut chan []Result) {
+			chRes <- partialQueryDoc(ngs, partialDoc)
+			close(chRes)
+		}(ngrams[start:end], doc, chRes)
+
+		start = end
+	}
+	//wg.Wait()
+
+	results := make([]Result, 0, 128)
+	for _, ch := range chans {
+		partialResults := <-ch
+		results = append(results, partialResults...)
 	}
 
 	printResults(results)
