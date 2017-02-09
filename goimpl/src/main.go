@@ -4,11 +4,8 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"runtime"
-	"sort"
-	"strings"
 )
 
 func check(e error) {
@@ -16,6 +13,8 @@ func check(e error) {
 		panic(e)
 	}
 }
+
+type Empty struct{}
 
 type Ngram struct {
 	Value string
@@ -40,122 +39,111 @@ func (a ByAppearance) Less(i, j int) bool {
 	return len(a[i].NgramValue.Value) < len(a[j].NgramValue.Value)
 }
 
-func deleteNgram(ngrams []Ngram, ngram string) []Ngram {
-	for i, cur := range ngrams {
-		if ngram == cur.Value {
-			ngrams[i].Valid = false
-			return ngrams
-		}
-	}
-	return ngrams
-}
-
-func readInitial(in *bufio.Reader) []Ngram {
-	ngrams := make([]Ngram, 0, 10000)
-
+func readInitial(in *bufio.Reader, ngdb *NgramDB) *NgramDB {
 	for {
 		line, _ := in.ReadString('\n')
 		line = line[:len(line)-1]
 		if "S" == line {
 			fmt.Println("R")
-			return ngrams
+			return ngdb
 		}
-		ngrams = append(ngrams, Ngram{line, true})
-	}
-	return nil
-}
 
-func filterInvalidResults(results []Result) []Result {
-	res := results[:0]
-	for _, cr := range results {
-		if cr.NgramValue.Valid {
-			res = append(res, cr)
-		}
+		ngdb.AddNgram(line)
 	}
 
-	return res
+	return nil // should never come here!!!
 }
 
 func printResults(results []Result) {
-	/*
-		filtered := filterInvalidResults(results)
-	*/
 	filtered := results
 	if len(filtered) <= 0 {
 		fmt.Printf("-1\n")
 		return
 	}
 
-	sort.Sort(ByAppearance(filtered))
+	visited := make(map[string]Empty)
+
+	//sort.Sort(ByAppearance(filtered))
+	visited[filtered[0].NgramValue.Value] = Empty{}
 	fmt.Print(filtered[0].NgramValue.Value)
 	for _, r := range filtered[1:] {
-		fmt.Print("|" + r.NgramValue.Value)
+		if _, ok := visited[r.NgramValue.Value]; !ok {
+			visited[r.NgramValue.Value] = Empty{}
+			fmt.Print("|" + r.NgramValue.Value)
+		}
 	}
 	fmt.Println()
 }
 
-func partialQueryDoc(ngrams []Ngram, doc string) []Result {
+func partialQueryDoc(ngdb *NgramDB, doc string) []Result {
 	results := make([]Result, 0, 32)
-	for _, ngram := range ngrams {
-		if !ngram.Valid {
-			continue
+
+	localResults := make([]NgramResult, 0, 16)
+
+	start := 0
+	end := 0
+	sz := len(doc)
+	for start < sz {
+		// find start of word
+		for start = end; start < sz && doc[start] == ' '; start += 1 {
 		}
-		ngramValue := " " + ngram.Value + " "
-		pos := strings.Index(doc, ngramValue)
-		if pos != -1 {
-			results = append(results, Result{ngram, pos})
+		// find end of word
+		for end = start; end < sz && doc[end] != ' '; end += 1 {
 		}
+
+		if start >= sz {
+			break
+		}
+
+		localResults = append(localResults, ngdb.FindNgrams(doc[start:], start)...)
 	}
+
+	for _, lr := range localResults {
+		results = append(results, Result{Ngram{lr.Word, true}, lr.Pos})
+	}
+
 	return results
 }
 
-func queryDoc(ngrams []Ngram, doc string) {
-	doc = " " + doc + " "
+func queryDoc(ngdb *NgramDB, doc string) {
 	//fmt.Fprintln(os.Stderr, "queryDoc", len(ngrams))
 
-	//results := partialQueryDoc(ngrams, doc)
+	results := partialQueryDoc(ngdb, doc)
+	/*
+		cores := runtime.NumCPU()
+		chans := make([]chan []Result, 0, cores+1)
 
-	cores := runtime.NumCPU()
-	chans := make([]chan []Result, 0, cores+1)
+		sz := len(ngrams)
+		start := 0
+		batchSz := int(sz / cores)
+		//var wg sync.WaitGroup
+		for start < sz {
+			//wg.Add(1)
 
-	sz := len(ngrams)
-	start := 0
-	batchSz := int(sz / cores)
-	//var wg sync.WaitGroup
-	for start < sz {
-		//wg.Add(1)
+			end := int(math.Min(float64(start+batchSz), float64(sz)))
 
-		end := int(math.Min(float64(start+batchSz), float64(sz)))
+			chRes := make(chan []Result)
+			chans = append(chans, chRes)
 
-		chRes := make(chan []Result)
-		chans = append(chans, chRes)
+			go func(ngs []Ngram, partialDoc string, chOut chan []Result) {
+				chRes <- partialQueryDoc(ngs, partialDoc)
+				close(chRes)
+			}(ngrams[start:end], doc, chRes)
 
-		go func(ngs []Ngram, partialDoc string, chOut chan []Result) {
-			chRes <- partialQueryDoc(ngs, partialDoc)
-			close(chRes)
-		}(ngrams[start:end], doc, chRes)
+			start = end
+		}
+		//wg.Wait()
 
-		start = end
-	}
-	//wg.Wait()
-
-	results := make([]Result, 0, 128)
-	for _, ch := range chans {
-		partialResults := <-ch
-		results = append(results, partialResults...)
-	}
-
+		results := make([]Result, 0, 128)
+		for _, ch := range chans {
+			partialResults := <-ch
+			results = append(results, partialResults...)
+		}
+	*/
 	printResults(results)
 }
 
-const (
-	Dbyte = 'D'
-	Abyte = 'A'
-	Qbyte = 'Q'
-	Fbyte = 'F'
-)
-
-func processWorkload(in *bufio.Reader, ngrams []Ngram) []Ngram {
+func processWorkload(in *bufio.Reader, ngdb *NgramDB) *NgramDB {
 	for {
 		line, err := in.ReadString('\n')
 		if err != nil {
@@ -167,18 +155,18 @@ func processWorkload(in *bufio.Reader, ngrams []Ngram) []Ngram {
 		line = line[:len(line)-1]
 		//fmt.Fprintln(os.Stderr, line)
 
-		if line[0] == Dbyte {
-			ngrams = deleteNgram(ngrams, line[2:])
-		} else if line[0] == Abyte {
-			ngrams = append(ngrams, Ngram{line[2:], true})
-		} else if line[0] == Qbyte {
-			queryDoc(ngrams, line[2:])
-		} else if line[0] == Fbyte {
+		if line[0] == 'D' {
+			ngdb.RemoveNgram(line[2:])
+		} else if line[0] == 'A' {
+			ngdb.AddNgram(line[2:])
+		} else if line[0] == 'Q' {
+			queryDoc(ngdb, line[2:])
+		} else if line[0] == 'F' {
 			// TODO process the batch
 			continue
 		}
 	}
-	return ngrams
+	return ngdb
 }
 
 func main() {
@@ -186,11 +174,14 @@ func main() {
 	fmt.Fprintf(os.Stderr, "cores: [%d]\n", runtime.NumCPU())
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
+	ngramDb := NewNgramDB()
+	ngdb := &ngramDb
+
 	in := bufio.NewReader(os.Stdin)
 
-	ngrams := readInitial(in)
-	fmt.Fprintf(os.Stderr, "initial ngrams [%d]\n", len(ngrams))
+	ngdb = readInitial(in, ngdb)
+	fmt.Fprintf(os.Stderr, "initial ngrams 1st level [%d]\n", len(ngdb.Trie.Root.Children))
 
-	ngrams = processWorkload(in, ngrams)
-	fmt.Fprintf(os.Stderr, "after workload ngrams [%d]\n", len(ngrams))
+	ngdb = processWorkload(in, ngdb)
+	fmt.Fprintf(os.Stderr, "after workload ngrams 1st level [%d]\n", len(ngdb.Trie.Root.Children))
 }
