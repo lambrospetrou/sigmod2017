@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"runtime"
+	"strconv"
 	"time"
 )
 
@@ -18,10 +19,16 @@ func check(e error) {
 
 type Empty struct{}
 
+type OpQuery struct {
+	Doc   string
+	OpIdx int
+}
+
 type WorkerJob struct {
 	Ngdb        *NgramDB
 	Doc         string
 	StartIdxEnd int
+	OpIdx       int
 	ResultCh    chan []NgramResult
 }
 
@@ -30,18 +37,20 @@ type WorkerStatus struct {
 }
 
 type WorkerPool struct {
-	Workers        int
-	WorkerJobCh    []chan WorkerJob
-	WorkerStatusCh []chan WorkerStatus
+	Workers         int
+	WorkersInternal int
+	WorkerJobCh     []chan WorkerJob
+	WorkerStatusCh  []chan WorkerStatus
 }
 
 func NewWorkerPool() *WorkerPool {
 	numWorkers := runtime.NumCPU()
 
 	pool := &WorkerPool{
-		Workers:        numWorkers,
-		WorkerJobCh:    make([]chan WorkerJob, 0, numWorkers),
-		WorkerStatusCh: make([]chan WorkerStatus, 0, numWorkers),
+		Workers:         numWorkers,
+		WorkersInternal: 0,
+		WorkerJobCh:     make([]chan WorkerJob, 0, numWorkers),
+		WorkerStatusCh:  make([]chan WorkerStatus, 0, numWorkers),
 	}
 	for i := 0; i < numWorkers; i++ {
 		pool.WorkerJobCh = append(pool.WorkerJobCh, make(chan WorkerJob, 1))
@@ -57,7 +66,7 @@ func worker(chStatus chan WorkerStatus, chJobIn chan WorkerJob) {
 	for {
 		select {
 		case job := <-chJobIn:
-			job.ResultCh <- partialQueryDoc(job.Ngdb, job.Doc, job.StartIdxEnd)
+			job.ResultCh <- partialQueryDoc(job.Ngdb, job.Doc, job.StartIdxEnd, job.OpIdx)
 			break
 		case msg := <-chStatus:
 			if msg.Status == "terminate" {
@@ -67,7 +76,7 @@ func worker(chStatus chan WorkerStatus, chJobIn chan WorkerJob) {
 	}
 }
 
-func partialQueryDoc(ngdb *NgramDB, doc string, startIdxEnd int) []NgramResult {
+func partialQueryDoc(ngdb *NgramDB, doc string, startIdxEnd int, opIdx int) []NgramResult {
 	localResults := make([]NgramResult, 0, 16)
 
 	sz := len(doc)
@@ -85,7 +94,7 @@ func partialQueryDoc(ngdb *NgramDB, doc string, startIdxEnd int) []NgramResult {
 			break
 		}
 
-		localResults = append(localResults, ngdb.FindNgrams(doc[start:], start)...)
+		localResults = append(localResults, ngdb.FindNgrams(doc[start:], start, opIdx)...)
 
 		// find end of word
 		for end = start; end < sz && doc[end] != ' '; end += 1 {
@@ -95,7 +104,7 @@ func partialQueryDoc(ngdb *NgramDB, doc string, startIdxEnd int) []NgramResult {
 	return localResults
 }
 
-func queryDispatcher(ngdb *NgramDB, wpool *WorkerPool, doc string) {
+func queryDispatcher(ngdb *NgramDB, wpool *WorkerPool, doc string, opIdx int) {
 	defer timeSave(time.Now(), "qd()")
 
 	//fmt.Fprintln(os.Stderr, "queryDoc", len(ngrams))
@@ -129,6 +138,7 @@ func queryDispatcher(ngdb *NgramDB, wpool *WorkerPool, doc string) {
 			Ngdb:        ngdb,
 			Doc:         doc[start:docEnd],
 			StartIdxEnd: startIdxEnd - start,
+			OpIdx:       opIdx,
 			ResultCh:    chRes,
 		}
 
@@ -144,11 +154,20 @@ func queryDispatcher(ngdb *NgramDB, wpool *WorkerPool, doc string) {
 	printResults(results)
 }
 
-func processWorkload(in *bufio.Reader, ngdb *NgramDB, workerPool *WorkerPool) *NgramDB {
+func queryBatchDispatcher(ngdb *NgramDB, wpool *WorkerPool, opQ []OpQuery) {
+	defer timeStop(time.Now(), "qdb():"+strconv.Itoa(len(opQ)))
+	for _, q := range opQ {
+		queryDispatcher(ngdb, wpool, q.Doc, q.OpIdx)
+	}
+}
+
+func processWorkload(in *bufio.Reader, ngdb *NgramDB, workerPool *WorkerPool, opIdx int) *NgramDB {
 	defer timeStop(time.Now(), "process()")
 
-	//isMedium := len(ngdb.Trie.Root.Children) >= 36
+	opQs := make([]OpQuery, 0, 64)
 
+	// For cleanup purposes
+	//lowOpIdx := opIdx
 	for {
 		line, err := in.ReadString('\n')
 		if err != nil {
@@ -158,16 +177,20 @@ func processWorkload(in *bufio.Reader, ngdb *NgramDB, workerPool *WorkerPool) *N
 			panic(err)
 		}
 		line = line[:len(line)-1]
-		//fmt.Fprintln(os.Stderr, line)
+		opIdx += 1
 
 		if line[0] == 'D' {
-			ngdb.RemoveNgram(line[2:])
+			ngdb.RemoveNgram(line[2:], opIdx)
 		} else if line[0] == 'A' {
-			ngdb.AddNgram(line[2:])
+			ngdb.AddNgram(line[2:], opIdx)
 		} else if line[0] == 'Q' {
-			queryDispatcher(ngdb, workerPool, line[2:])
+			opQs = append(opQs, OpQuery{line[2:], opIdx})
+			//queryDispatcher(ngdb, workerPool, line[2:], opIdx)
 		} else if line[0] == 'F' {
-			// TODO process the batch
+			queryBatchDispatcher(ngdb, workerPool, opQs)
+			opQs = opQs[:0]
+
+			//lowOpIdx = opIdx
 			continue
 		}
 	}
@@ -187,10 +210,10 @@ func main() {
 
 	in := bufio.NewReader(os.Stdin)
 
-	ngdb = readInitial(in, ngdb)
+	ngdb, opIdx := readInitial(in, ngdb)
 	fmt.Fprintf(os.Stderr, "initial ngrams 1st level [%d]\n", len(ngdb.Trie.Root.Children))
 
-	ngdb = processWorkload(in, ngdb, workerPool)
+	ngdb = processWorkload(in, ngdb, workerPool, opIdx)
 	fmt.Fprintf(os.Stderr, "after workload ngrams 1st level [%d]\n", len(ngdb.Trie.Root.Children))
 }
 
@@ -215,21 +238,24 @@ func timeStop(start time.Time, msg string) {
 	fmt.Fprintf(os.Stderr, "%s - Time[%s]\n", msg, total)
 }
 
-func readInitial(in *bufio.Reader, ngdb *NgramDB) *NgramDB {
+func readInitial(in *bufio.Reader, ngdb *NgramDB) (*NgramDB, int) {
 	defer timeStop(time.Now(), "readInitial")
 
+	opIdx := 0
 	for {
 		line, _ := in.ReadString('\n')
 		line = line[:len(line)-1]
 		if "S" == line {
 			fmt.Println("R")
-			return ngdb
+			return ngdb, opIdx
 		}
 
-		ngdb.AddNgram(line)
+		opIdx += 1
+
+		ngdb.AddNgram(line, opIdx)
 	}
 
-	return nil // should never come here!!!
+	return nil, 0 // should never come here!!!
 }
 
 func printResults(results []NgramResult) {

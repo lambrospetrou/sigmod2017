@@ -19,7 +19,7 @@ func NewNgramDB() NgramDB {
 	}
 }
 
-func (ngdb *NgramDB) AddNgram(ngram string) {
+func (ngdb *NgramDB) AddNgram(ngram string, opIdx int) {
 	words := strings.Split(strings.Trim(ngram, " "), " ")
 	//fmt.Fprintln(os.Stderr, "add", words)
 
@@ -27,10 +27,11 @@ func (ngdb *NgramDB) AddNgram(ngram string) {
 	for _, w := range words {
 		cNode = cNode.AddWord(w)
 	}
-	cNode.Valid = true
+
+	cNode.Records = append(cNode.Records, OpRecord{OP_ADD, opIdx})
 }
 
-func (ngdb *NgramDB) RemoveNgram(ngram string) {
+func (ngdb *NgramDB) RemoveNgram(ngram string, opIdx int) {
 	words := strings.Split(strings.Trim(ngram, " "), " ")
 	//fmt.Fprintln(os.Stderr, "rem", words)
 
@@ -41,11 +42,11 @@ func (ngdb *NgramDB) RemoveNgram(ngram string) {
 		}
 	}
 	if cNode != nil {
-		cNode.Valid = false
+		cNode.Records = append(cNode.Records, OpRecord{OP_DEL, opIdx})
 	}
 }
 
-func (ngdb *NgramDB) FindNgrams(partialDoc string, globalStartIdx int) []NgramResult {
+func (ngdb *NgramDB) FindNgrams(partialDoc string, globalStartIdx int, opIdx int) []NgramResult {
 	sz := len(partialDoc)
 
 	/*if strings.HasPrefix(partialDoc, "s s") {
@@ -77,7 +78,7 @@ func (ngdb *NgramDB) FindNgrams(partialDoc string, globalStartIdx int) []NgramRe
 			break
 		}
 
-		if cNode.Valid {
+		if cNode.IsValid(opIdx) {
 			//fmt.Fprintln(os.Stderr, "find ngrams valid", partialDoc[:end])
 
 			results = append(results, NgramResult{
