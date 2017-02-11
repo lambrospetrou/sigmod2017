@@ -11,7 +11,7 @@ type NgramDB struct {
 }
 
 type NgramResult struct {
-	Word string
+	Term string
 	Pos  int
 }
 
@@ -23,7 +23,7 @@ func NewNgramDB() NgramDB {
 }
 
 func (ngdb *NgramDB) AddNgram(ngram string) {
-	words := strings.Split(ngram, " ")
+	words := strings.Split(strings.Trim(ngram, " "), " ")
 	//fmt.Fprintln(os.Stderr, "add", words)
 
 	cNode := &ngdb.Trie.Root
@@ -34,13 +34,12 @@ func (ngdb *NgramDB) AddNgram(ngram string) {
 }
 
 func (ngdb *NgramDB) RemoveNgram(ngram string) {
-	words := strings.Split(ngram, " ")
+	words := strings.Split(strings.Trim(ngram, " "), " ")
 	//fmt.Fprintln(os.Stderr, "rem", words)
 
 	cNode := &ngdb.Trie.Root
 	for _, w := range words {
-		cNode = cNode.FindWord(w)
-		if cNode == nil {
+		if cNode = cNode.FindWord(w); cNode == nil {
 			break
 		}
 	}
@@ -53,7 +52,7 @@ func (ngdb *NgramDB) FindNgrams(partialDoc string, globalStartIdx int) []NgramRe
 	sz := len(partialDoc)
 
 	/*if strings.HasPrefix(partialDoc, "s s") {
-		fmt.Fprintln(os.Stderr, "find ngrams", partialDoc, ngdb.Trie)
+		fmt.Fprintln(os.Stderr, "find ngrams", partialDoc, ngdb.Trie
 		os.Exit(1)
 	}*/
 
@@ -70,11 +69,11 @@ func (ngdb *NgramDB) FindNgrams(partialDoc string, globalStartIdx int) []NgramRe
 		for end = start; end < sz && partialDoc[end] != ' '; end += 1 {
 		}
 
-		if start == end {
+		if start == end { // start == end == sz
 			break
 		}
 
-		//fmt.Fprintln(os.Stderr, "find ngrams", partialDoc[:end], partialDoc[start:end])
+		//fmt.Fprintln(os.Stderr, "find ngrams", partialDoc[:end], partialDoc[start:end], len(partialDoc[start:end]))
 
 		cNode = cNode.FindWord(partialDoc[start:end])
 		if cNode == nil {
@@ -83,8 +82,9 @@ func (ngdb *NgramDB) FindNgrams(partialDoc string, globalStartIdx int) []NgramRe
 
 		if cNode.Valid {
 			//fmt.Fprintln(os.Stderr, "find ngrams valid", partialDoc[:end])
+
 			results = append(results, NgramResult{
-				Word: partialDoc[:end],
+				Term: partialDoc[:end],
 				Pos:  globalStartIdx + start,
 			})
 		}

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"runtime"
 )
@@ -54,92 +55,96 @@ func readInitial(in *bufio.Reader, ngdb *NgramDB) *NgramDB {
 	return nil // should never come here!!!
 }
 
-func printResults(results []Result) {
+func printResults(results []NgramResult) {
 	filtered := results
 	if len(filtered) <= 0 {
-		fmt.Printf("-1\n")
+		fmt.Println("-1")
 		return
 	}
 
 	visited := make(map[string]Empty)
 
 	//sort.Sort(ByAppearance(filtered))
-	visited[filtered[0].NgramValue.Value] = Empty{}
-	fmt.Print(filtered[0].NgramValue.Value)
+	visited[filtered[0].Term] = Empty{}
+	fmt.Print(filtered[0].Term)
 	for _, r := range filtered[1:] {
-		if _, ok := visited[r.NgramValue.Value]; !ok {
-			visited[r.NgramValue.Value] = Empty{}
-			fmt.Print("|" + r.NgramValue.Value)
+		if _, ok := visited[r.Term]; !ok {
+			visited[r.Term] = Empty{}
+			fmt.Print("|" + r.Term)
 		}
 	}
 	fmt.Println()
 }
 
-func partialQueryDoc(ngdb *NgramDB, doc string) []Result {
-	results := make([]Result, 0, 32)
-
+func partialQueryDoc(ngdb *NgramDB, doc string, startIdxEnd int) []NgramResult {
 	localResults := make([]NgramResult, 0, 16)
+
+	sz := len(doc)
+
+	//fmt.Fprintln(os.Stderr, "partial query doc", sz, startIdxEnd)
 
 	start := 0
 	end := 0
-	sz := len(doc)
-	for start < sz {
+	for start < startIdxEnd {
 		// find start of word
-		for start = end; start < sz && doc[start] == ' '; start += 1 {
-		}
-		// find end of word
-		for end = start; end < sz && doc[end] != ' '; end += 1 {
+		for start = end; start < startIdxEnd && doc[start] == ' '; start += 1 {
 		}
 
-		if start >= sz {
+		if start >= startIdxEnd {
 			break
 		}
 
 		localResults = append(localResults, ngdb.FindNgrams(doc[start:], start)...)
+
+		// find end of word
+		for end = start; end < sz && doc[end] != ' '; end += 1 {
+		}
 	}
 
-	for _, lr := range localResults {
-		results = append(results, Result{Ngram{lr.Word, true}, lr.Pos})
-	}
-
-	return results
+	return localResults
 }
 
 func queryDoc(ngdb *NgramDB, doc string) {
 	//fmt.Fprintln(os.Stderr, "queryDoc", len(ngrams))
+	docSz := len(doc)
 
-	results := partialQueryDoc(ngdb, doc)
-	/*
-		cores := runtime.NumCPU()
-		chans := make([]chan []Result, 0, cores+1)
+	// single thread
+	//results := partialQueryDoc(ngdb, doc, docSz, docSz)
 
-		sz := len(ngrams)
-		start := 0
-		batchSz := int(sz / cores)
-		//var wg sync.WaitGroup
-		for start < sz {
-			//wg.Add(1)
+	cores := runtime.NumCPU()
+	chans := make([]chan []NgramResult, 0, cores+1)
 
-			end := int(math.Min(float64(start+batchSz), float64(sz)))
+	maxLenNgram := 100
 
-			chRes := make(chan []Result)
-			chans = append(chans, chRes)
-
-			go func(ngs []Ngram, partialDoc string, chOut chan []Result) {
-				chRes <- partialQueryDoc(ngs, partialDoc)
-				close(chRes)
-			}(ngrams[start:end], doc, chRes)
-
-			start = end
+	start := 0
+	batchSz := int(docSz / cores)
+	for start < docSz {
+		startIdxEnd := int(math.Min(float64(start+batchSz), float64(docSz)))
+		// make sure we are at the end of a word
+		for ; startIdxEnd < docSz && doc[startIdxEnd] != ' '; startIdxEnd += 1 {
 		}
-		//wg.Wait()
 
-		results := make([]Result, 0, 128)
-		for _, ch := range chans {
-			partialResults := <-ch
-			results = append(results, partialResults...)
-		}
-	*/
+		docEnd := int(math.Min(float64(startIdxEnd+maxLenNgram), float64(docSz)))
+
+		//fmt.Fprintln(os.Stderr, docSz, cores, batchSz, start, startIdxEnd, docEnd)
+
+		chRes := make(chan []NgramResult)
+		chans = append(chans, chRes)
+
+		go func(ngdb *NgramDB, partialDoc string, startIdxEnd int, chOut chan []NgramResult) {
+			chRes <- partialQueryDoc(ngdb, partialDoc, startIdxEnd)
+			close(chRes)
+		}(ngdb, doc[start:docEnd], startIdxEnd-start, chRes)
+
+		start = startIdxEnd
+	}
+
+	results := make([]NgramResult, 0, 128)
+	for _, ch := range chans {
+		partialResults := <-ch
+		results = append(results, partialResults...)
+	}
+
 	printResults(results)
 }
 
