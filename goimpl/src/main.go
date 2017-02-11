@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"runtime"
+	"time"
 )
 
 func check(e error) {
@@ -16,42 +17,6 @@ func check(e error) {
 }
 
 type Empty struct{}
-
-func readInitial(in *bufio.Reader, ngdb *NgramDB) *NgramDB {
-	for {
-		line, _ := in.ReadString('\n')
-		line = line[:len(line)-1]
-		if "S" == line {
-			fmt.Println("R")
-			return ngdb
-		}
-
-		ngdb.AddNgram(line)
-	}
-
-	return nil // should never come here!!!
-}
-
-func printResults(results []NgramResult) {
-	filtered := results
-	if len(filtered) <= 0 {
-		fmt.Println("-1")
-		return
-	}
-
-	visited := make(map[string]Empty)
-
-	//sort.Sort(ByAppearance(filtered))
-	visited[filtered[0].Term] = Empty{}
-	fmt.Print(filtered[0].Term)
-	for _, r := range filtered[1:] {
-		if _, ok := visited[r.Term]; !ok {
-			visited[r.Term] = Empty{}
-			fmt.Print("|" + r.Term)
-		}
-	}
-	fmt.Println()
-}
 
 type WorkerJob struct {
 	Ngdb        *NgramDB
@@ -130,7 +95,9 @@ func partialQueryDoc(ngdb *NgramDB, doc string, startIdxEnd int) []NgramResult {
 	return localResults
 }
 
-func queryDoc(ngdb *NgramDB, wpool *WorkerPool, doc string) {
+func queryDispatcher(ngdb *NgramDB, wpool *WorkerPool, doc string) {
+	defer timeSave(time.Now(), "qd()")
+
 	//fmt.Fprintln(os.Stderr, "queryDoc", len(ngrams))
 	docSz := len(doc)
 
@@ -142,6 +109,8 @@ func queryDoc(ngdb *NgramDB, wpool *WorkerPool, doc string) {
 	maxLenNgram := 100
 
 	start := 0
+
+	// The DIV might less than cores so add 1 to cover all the doc
 	batchSz := int(docSz/cores) + 1
 	for start < docSz {
 		startIdxEnd := int(math.Min(float64(start+batchSz), float64(docSz)))
@@ -176,6 +145,10 @@ func queryDoc(ngdb *NgramDB, wpool *WorkerPool, doc string) {
 }
 
 func processWorkload(in *bufio.Reader, ngdb *NgramDB, workerPool *WorkerPool) *NgramDB {
+	defer timeStop(time.Now(), "process()")
+
+	//isMedium := len(ngdb.Trie.Root.Children) >= 36
+
 	for {
 		line, err := in.ReadString('\n')
 		if err != nil {
@@ -192,7 +165,7 @@ func processWorkload(in *bufio.Reader, ngdb *NgramDB, workerPool *WorkerPool) *N
 		} else if line[0] == 'A' {
 			ngdb.AddNgram(line[2:])
 		} else if line[0] == 'Q' {
-			queryDoc(ngdb, workerPool, line[2:])
+			queryDispatcher(ngdb, workerPool, line[2:])
 		} else if line[0] == 'F' {
 			// TODO process the batch
 			continue
@@ -202,6 +175,7 @@ func processWorkload(in *bufio.Reader, ngdb *NgramDB, workerPool *WorkerPool) *N
 }
 
 func main() {
+	defer timeFinish(time.Now(), "main()")
 
 	fmt.Fprintf(os.Stderr, "cores: [%d]\n", runtime.NumCPU())
 	runtime.GOMAXPROCS(runtime.NumCPU())
@@ -218,4 +192,63 @@ func main() {
 
 	ngdb = processWorkload(in, ngdb, workerPool)
 	fmt.Fprintf(os.Stderr, "after workload ngrams 1st level [%d]\n", len(ngdb.Trie.Root.Children))
+}
+
+/////////////////// HELPERS /////////////////////
+
+var timers map[string]time.Duration = make(map[string]time.Duration)
+
+func timeSave(start time.Time, msg string) {
+	timers[msg] += time.Since(start)
+}
+func timeFinish(start time.Time, msg string) {
+	total := time.Since(start)
+	fmt.Fprintf(os.Stderr, "%s - Time[%s]\n", msg, total)
+
+	for k, v := range timers {
+		fmt.Fprintf(os.Stderr, "%s - Time[%s]\n", k, v)
+	}
+}
+
+func timeStop(start time.Time, msg string) {
+	total := time.Since(start)
+	fmt.Fprintf(os.Stderr, "%s - Time[%s]\n", msg, total)
+}
+
+func readInitial(in *bufio.Reader, ngdb *NgramDB) *NgramDB {
+	defer timeStop(time.Now(), "readInitial")
+
+	for {
+		line, _ := in.ReadString('\n')
+		line = line[:len(line)-1]
+		if "S" == line {
+			fmt.Println("R")
+			return ngdb
+		}
+
+		ngdb.AddNgram(line)
+	}
+
+	return nil // should never come here!!!
+}
+
+func printResults(results []NgramResult) {
+	filtered := results
+	if len(filtered) <= 0 {
+		fmt.Println("-1")
+		return
+	}
+
+	visited := make(map[string]Empty)
+
+	//sort.Sort(ByAppearance(filtered))
+	visited[filtered[0].Term] = Empty{}
+	fmt.Print(filtered[0].Term)
+	for _, r := range filtered[1:] {
+		if _, ok := visited[r.Term]; !ok {
+			visited[r.Term] = Empty{}
+			fmt.Print("|" + r.Term)
+		}
+	}
+	fmt.Println()
 }

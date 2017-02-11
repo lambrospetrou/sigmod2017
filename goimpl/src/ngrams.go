@@ -1,8 +1,6 @@
 package main
 
 import (
-	"fmt"
-	"os"
 	"strings"
 )
 
@@ -16,7 +14,6 @@ type NgramResult struct {
 }
 
 func NewNgramDB() NgramDB {
-	fmt.Fprintln(os.Stderr, "new db")
 	return NgramDB{
 		Trie: buildTrie(),
 	}
