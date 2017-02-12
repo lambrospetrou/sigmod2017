@@ -25,7 +25,7 @@ func (ngdb *NgramDB) AddNgram(ngram string, opIdx int) {
 
 	cNode := &ngdb.Trie.Root
 	for _, w := range words {
-		cNode = cNode.AddWord(w)
+		_, cNode = cNode.AddWord(w)
 	}
 
 	cNode.Records = append(cNode.Records, OpRecord{OP_ADD, opIdx})
@@ -37,7 +37,7 @@ func (ngdb *NgramDB) RemoveNgram(ngram string, opIdx int) {
 
 	cNode := &ngdb.Trie.Root
 	for _, w := range words {
-		if cNode = cNode.FindWord(w); cNode == nil {
+		if _, cNode = cNode.FindWord(w); cNode == nil {
 			break
 		}
 	}
@@ -48,11 +48,6 @@ func (ngdb *NgramDB) RemoveNgram(ngram string, opIdx int) {
 
 func (ngdb *NgramDB) FindNgrams(partialDoc string, globalStartIdx int, opIdx int) []NgramResult {
 	sz := len(partialDoc)
-
-	/*if strings.HasPrefix(partialDoc, "s s") {
-		fmt.Fprintln(os.Stderr, "find ngrams", partialDoc, ngdb.Trie
-		os.Exit(1)
-	}*/
 
 	// skip leading spaces
 	start := 0
@@ -73,7 +68,7 @@ func (ngdb *NgramDB) FindNgrams(partialDoc string, globalStartIdx int, opIdx int
 
 		//fmt.Fprintln(os.Stderr, "find ngrams", partialDoc[:end], partialDoc[start:end], len(partialDoc[start:end]))
 
-		cNode = cNode.FindWord(partialDoc[start:end])
+		_, cNode = cNode.FindWord(partialDoc[start:end])
 		if cNode == nil {
 			break
 		}
