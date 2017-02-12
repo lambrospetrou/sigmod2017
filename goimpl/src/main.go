@@ -44,7 +44,7 @@ type WorkerPool struct {
 }
 
 func NewWorkerPool() *WorkerPool {
-	parallelq := 40
+	parallelq := 10
 	numWorkers := runtime.NumCPU()
 
 	// normalize the inner workers to avoid over-threading
@@ -193,8 +193,6 @@ func queryBatchDispatcher(ngdb *NgramDB, wpool *WorkerPool, opQ []OpQuery) {
 		go parallelQueryWorker(ngdb, wpool, chansJobs[i])
 	}
 
-	results := make([][]NgramResult, 0, qsz)
-
 	for qidx := 0; qidx < qsz; {
 		for parallelidx := 0; parallelidx < wpool.ParallelQ; parallelidx, qidx = parallelidx+1, qidx+1 {
 			if qidx < qsz {
@@ -205,17 +203,14 @@ func queryBatchDispatcher(ngdb *NgramDB, wpool *WorkerPool, opQ []OpQuery) {
 		}
 	}
 
+	// Gather and print results
 	for qidx := 0; qidx < qsz; {
 		for parallelidx := 0; parallelidx < wpool.ParallelQ; parallelidx, qidx = parallelidx+1, qidx+1 {
 			localResults := <-chans[parallelidx]
 			if localResults != nil {
-				results = append(results, localResults)
+				printResults(localResults)
 			}
 		}
-	}
-	// print results in order
-	for _, res := range results {
-		printResults(res)
 	}
 }
 
@@ -268,10 +263,8 @@ func main() {
 	in := bufio.NewReader(os.Stdin)
 
 	ngdb, opIdx := readInitial(in, ngdb)
-	fmt.Fprintf(os.Stderr, "initial ngrams 1st level [%d]\n", len(ngdb.Trie.Root.Children))
 
 	ngdb = processWorkload(in, ngdb, workerPool, opIdx)
-	fmt.Fprintf(os.Stderr, "after workload ngrams 1st level [%d]\n", len(ngdb.Trie.Root.Children))
 }
 
 /////////////////// HELPERS /////////////////////

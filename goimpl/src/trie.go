@@ -16,8 +16,7 @@ type OpRecord struct {
 }
 
 type TrieNode struct {
-	ChildrenKeys map[string]int
-	Children     map[byte][]TrieNode
+	ChildrenKeys map[string]*TrieNode
 	Word         string
 	Records      []OpRecord
 }
@@ -28,8 +27,7 @@ type TrieRoot struct {
 
 func buildTrieNode(word string) TrieNode {
 	return TrieNode{
-		ChildrenKeys: make(map[string]int),
-		Children:     make(map[byte][]TrieNode),
+		ChildrenKeys: make(map[string]*TrieNode),
 		Word:         word,
 		Records:      make([]OpRecord, 0, 2),
 	}
@@ -63,42 +61,19 @@ func (tn *TrieNode) IsValid(opIdx int) bool {
 	return false
 }
 
-func (tn *TrieNode) AddWord(word string) (int, *TrieNode) {
-
-	nodes, ok := tn.Children[word[0]]
-	if !ok {
-		nodes = make([]TrieNode, 0, 4) // 4 words for starters
-	} else {
-		if nodeIdx, ok := tn.ChildrenKeys[word]; ok {
-			return nodeIdx, &tn.Children[word[0]][nodeIdx]
-		}
+func (tn *TrieNode) AddWord(word string) *TrieNode {
+	if n, ok := tn.ChildrenKeys[word]; ok {
+		return n
 	}
+	newNode := buildTrieNode(word)
+	tn.ChildrenKeys[word] = &newNode
 
-	tn.ChildrenKeys[word] = len(nodes)
-
-	nodes = append(nodes, buildTrieNode(word))
-	tn.Children[word[0]] = nodes
-	return len(nodes) - 1, &nodes[len(nodes)-1]
+	return &newNode
 }
 
-func (tn *TrieNode) FindWord(word string) (int, *TrieNode) {
-	idx, ok := tn.ChildrenKeys[word]
-	if !ok {
-		return -1, nil
+func (tn *TrieNode) FindWord(word string) *TrieNode {
+	if n, ok := tn.ChildrenKeys[word]; ok {
+		return n
 	}
-	return idx, &tn.Children[word[0]][idx]
-	/*
-		nodes, ok := tn.Children[word[0]]
-		if !ok {
-			return -1, nil
-		}
-
-		for i, w := range nodes {
-			if w.Word == word {
-				return i, &nodes[i]
-			}
-		}
-
-		return -1, nil // should never come here
-	*/
+	return nil
 }
