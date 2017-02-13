@@ -44,11 +44,11 @@ type WorkerPool struct {
 }
 
 func NewWorkerPool() *WorkerPool {
-	parallelq := 40
+	parallelq := 1
 	numWorkers := runtime.NumCPU()
-
 	// normalize the inner workers to avoid over-threading
-	numWorkers = numWorkers/parallelq + numWorkers%parallelq
+	//numWorkers = numWorkers/parallelq + numWorkers%parallelq
+	numWorkers = 1
 
 	pool := &WorkerPool{
 		Workers:        numWorkers,

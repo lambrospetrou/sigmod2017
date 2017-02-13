@@ -16,6 +16,8 @@ type OpRecord struct {
 }
 
 type TrieNode struct {
+	//ChildrenHash map[uint16]Empty
+	ChildrenHash []bool
 	ChildrenKeys map[string]*TrieNode
 	Word         string
 	Records      []OpRecord
@@ -27,6 +29,8 @@ type TrieRoot struct {
 
 func buildTrieNode(word string) TrieNode {
 	return TrieNode{
+		//ChildrenHash: make(map[uint16]Empty),
+		ChildrenHash: make([]bool, 1<<16, 1<<16),
 		ChildrenKeys: make(map[string]*TrieNode),
 		Word:         word,
 		Records:      make([]OpRecord, 0, 2),
@@ -68,10 +72,27 @@ func (tn *TrieNode) AddWord(word string) *TrieNode {
 	newNode := buildTrieNode(word)
 	tn.ChildrenKeys[word] = &newNode
 
+	if len(word) > 1 {
+		tn.ChildrenHash[uint16(word[0])<<8+uint16(word[1])] = true
+	} else {
+		tn.ChildrenHash[uint16(word[0])] = true
+	}
+
 	return &newNode
 }
 
 func (tn *TrieNode) FindWord(word string) *TrieNode {
+	var wordHash uint16
+	if len(word) > 1 {
+		wordHash = uint16(word[0])<<8 + uint16(word[1])
+	} else {
+		wordHash = uint16(word[0])
+	}
+	//if _, ok := tn.ChildrenHash[wordHash]; !ok {
+	if !tn.ChildrenHash[wordHash] {
+		return nil
+	}
+
 	if n, ok := tn.ChildrenKeys[word]; ok {
 		return n
 	}
