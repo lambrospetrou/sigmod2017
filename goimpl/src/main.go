@@ -44,7 +44,7 @@ type WorkerPool struct {
 }
 
 func NewWorkerPool() *WorkerPool {
-	parallelq := 10
+	parallelq := 40
 	numWorkers := runtime.NumCPU()
 
 	// normalize the inner workers to avoid over-threading
@@ -98,7 +98,10 @@ func partialQueryDoc(ngdb *NgramDB, doc string, startIdxEnd int, opIdx int) []Ng
 			break
 		}
 
-		localResults = append(localResults, ngdb.FindNgrams(doc[start:], start, opIdx)...)
+		tresult := ngdb.FindNgrams(doc[start:], start, opIdx)
+		if len(tresult) > 0 {
+			localResults = append(localResults, tresult...)
+		}
 
 		// find end of word
 		for end = start; end < sz && doc[end] != ' '; end += 1 {
@@ -148,7 +151,7 @@ func queryDispatcher(ngdb *NgramDB, wpool *WorkerPool, wpoolStartIdx int, opQ Op
 		currentWorker += 1
 	}
 
-	results := make([]NgramResult, 0, 32)
+	results := make([]NgramResult, 0, 16)
 	for _, ch := range chans {
 		results = append(results, (<-ch)...)
 	}
