@@ -11,6 +11,7 @@ using namespace std;
 
 unordered_set<string> ngramsMap;
 
+pair<int,int> largestGram={0,0};
 
 int query1 = 1;;
 
@@ -23,13 +24,16 @@ public:
     bool wordMarker() { return mMarker; }
     void setWordMarker(bool value) { mMarker = value; }
     Node* findChild(char c);
+    
     void appendChild(Node* child) { mChildren.push_back(child); }
     vector<Node*> children() { return mChildren; }
+    string contents;
 
 private:
     char mContent;
     bool mMarker;
     vector<Node*> mChildren;
+    
 };
 
 class Trie {
@@ -38,13 +42,23 @@ public:
     ~Trie();
     void addWord(string&& s);
     Node* searchWord(string s);
-    void deleteWord(string s);
+    void deleteWord(string&& s);
 private:
     Node* root;
 };
 
 Node* Node::findChild(char c)
 {
+    std::size_t found = contents.find(c);
+    if(found!=string::npos)
+    {
+	return mChildren[found];
+	
+    }
+
+    return NULL;
+
+/*
     for ( int i = 0; i < mChildren.size(); i++ )
     {
        // Node* tmp = mChildren[i];
@@ -54,7 +68,9 @@ Node* Node::findChild(char c)
         }
     }
 
+
     return NULL;
+*/
 }
 
 Trie::Trie()
@@ -83,26 +99,32 @@ void Trie::addWord(string&& s)
         if ( child != NULL )
         {
             current = child;
+	   
         }
         else
         {
             Node* tmp = new Node();
             tmp->setContent(s[i]);
             current->appendChild(tmp);
+	    current->contents.push_back(s[i]);
             current = tmp;
         }
         if ( i == s.length() - 1 )
-            current->setWordMarker(true);
+        current->setWordMarker(true);
+           
     }
+     
 }
 
-void Trie::deleteWord(string s)
+//u need to fix this.
+void Trie::deleteWord(string&& s)
 {
 	Node* current = root;
-
+	//Node* prev = root;
+	int length=s.length();
 	    while ( current != NULL )
 	    {
-	        for ( int i = 0; i < s.length(); i++ )
+	        for ( int i = 0; i < length; i++ )
 	        {
 	            Node* tmp = current->findChild(s[i]);
 	            if ( tmp == NULL ){
@@ -110,7 +132,13 @@ void Trie::deleteWord(string s)
 	                return ;
 	            }
 	            current = tmp;
+		//  if (i==length-2)
+		//   {
+		//   prev = tmp;
+//
+		//   }
 	        }
+	        //prev->contents[current->content()]
 	        current->setWordMarker(false);
 		return ;
 
@@ -144,7 +172,9 @@ Trie* trie = new Trie();
 string query(string document)
 {
 	unsigned docLength = document.length();
+	int largestGramLength = largestGram.first;
 	unordered_set<string> checkedWords;
+
 	std::string result= "";
 	//doclength -1
 	string word = "";
@@ -152,13 +182,27 @@ string query(string document)
 	int indexChar =0;
 	bool firstTime = true;
 	int countWords = 0;
-	
-	
+	checkedWords.reserve(1000);
+	//Trie *trie2 = new Trie();
 	bool lastTime=false;
 	for(unsigned i =0 ; i<docLength ; i++)
 	{
 		//indexChar=i;
 		//query 50
+
+		
+
+		//Node *nd = trie->searchWord(word);
+		/**
+		*
+		*if found add the word continue to next word
+		*/
+		/*
+		if(nd != NULL && nd->wordMarker()
+			result+=word+"|";
+		}
+		*/
+
 
 		if(document[i] == ' ' || i==docLength-1)
 		{
@@ -173,9 +217,14 @@ string query(string document)
 
 			//if hello does not have pointers..
 			//then continue
-
+			
 			if(checkedWords.find(word) == checkedWords.end()){
-
+				//checkedWordVector.push_back(word);
+				//if(trie2->searchWord(word)!=NULL){
+				//cerr<<"NOT NULL"<<endl;
+				//}
+			 	//trie2->addWord(word);
+				//sort(checkedWordVector.begin(),checkedWordVector.end());
 				checkedWords.insert(word);
 				Node *nd = trie->searchWord(word);
 				if(nd != NULL && nd->wordMarker()){// trie->searchWord(word)){
@@ -312,28 +361,7 @@ string query(string document)
 
 			if(lastTime)
 			break;
-			
-		/*
-			if(countWords == largestGramLength)
-			{
-				cerr<<"reached"<<endl;
-
-				countWords=0;
-				firstTime = true;
-				//mporeis na kameis substring dame tse a paeis ws tsiame p theleis anw.
-				word="";
-				i= indexChar;
-				if(i==docLength)
-				break;
-			}
-			else{
-
-*/
-				/*if(query1==50)
-				{
-				cerr<<"found space but c<largests : "<<word<<endl;
-				}
-				*/
+		
 				if (i==docLength-1)
 				{
 					countWords=0;
@@ -349,7 +377,7 @@ string query(string document)
 						break;
 					word +=document[i];
 				}
-			//}
+			
 
 
 		}
@@ -358,25 +386,11 @@ string query(string document)
 				break;
 			word +=document[i];
 			
-			/*
-			if(checkedWords.find(word) == checkedWords.end()){
-
-				
-
-				checkedWords.insert(word);
-				Node *nd = trie->searchWord(word);
-				if(nd != NULL && nd->wordMarker()){// trie->searchWord(word)){
-
-					result+=word+"|";
-
-				}
-			}
-			*/
-			//todo: mporeis na fieis to -1
+			
 			if(i!=docLength-1){
-			//document[i+1]
+			
 			Node *nd = trie->searchWord(word);
-			if (nd==NULL){//nd->findChild(document[i])==NULL)	{
+			if (nd==NULL){	
 
 			countWords=0;
 			
@@ -391,7 +405,7 @@ string query(string document)
 				{
 					i++;
 					if(document[i]==' '  ){
-					i--;
+					
 					break;
 					}	
 				}
@@ -407,7 +421,7 @@ string query(string document)
 
 		}
 	}
-
+	//cerr<<"checked "<<checkedWords.size()<<endl;
 	if(result.length()>1){
 	result.pop_back();
 	return result;
@@ -424,16 +438,11 @@ int main()
 
 	
     	int counter=1;
-    	 cerr<<"In main"<<endl;
-//ngramsMap.reserve(10000);
-    	//read initial ngrams
-    	for (std::string line; std::getline(std::cin, line) && line != "S";) {
-		
-		//ngramsMap.insert(std::move(line));
-    		trie->addWord(std::move(line));
 
+    	for (std::string line; std::getline(std::cin, line) && line != "S";) {
+		trie->addWord(std::move(line));
     	   }
-      	  
+      	 
     	   std::cout << "R" << std::endl;
 
 
@@ -447,34 +456,20 @@ int main()
     	         switch (line[0]) {
     	            case 'Q': {
 
-    	            	string result = query(line.substr(2));
-//    	               auto result = ngramer.query(line.substr(2));
-//    	               auto ordered = orderResult(std::move(result));
-//
-//    		      	//cerr<<"query["<<counter<<"]"<<endl;
-//                            counter++;
+    	            	string result = query(move(line.substr(2)));
+
     	               std::cout << result << std::endl;
-    	               query1++;
-//cerr<<"query "<<query1<<endl;
+    	            //   query1++;
+			//cerr<<"query "<<query1<<endl;
     	               break;
     	            }
-    	            case 'A': {
-
-		
-
-    	            	//TODO: MOVE?
-			//ngramsMap.insert(line.substr(2));
-    	            	trie->addWord(line.substr(2));
-    	            //   ngramer.add(line.substr(2));
+    	            case 'A': {       
+    	            	trie->addWord(move(line.substr(2)));
+    	    
     	               break;
     	            }
     	            case 'D': {
-
-			//ngramsMap.erase(line.substr(2));
-
-    	            	
-    	            	trie->deleteWord(line.substr(2));
-    	            //   ngramer.remove(line.substr(2));
+    	            	trie->deleteWord(move(line.substr(2)));
     	               break;
     	            }
     	            default: {
