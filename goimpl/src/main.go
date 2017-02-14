@@ -44,11 +44,11 @@ type WorkerPool struct {
 }
 
 func NewWorkerPool() *WorkerPool {
-	parallelq := 1
+	parallelq := 10
 	numWorkers := runtime.NumCPU()
 	// normalize the inner workers to avoid over-threading
 	//numWorkers = numWorkers/parallelq + numWorkers%parallelq
-	numWorkers = 1
+	numWorkers = 4
 
 	pool := &WorkerPool{
 		Workers:        numWorkers,
@@ -160,25 +160,25 @@ func queryDispatcher(ngdb *NgramDB, wpool *WorkerPool, wpoolStartIdx int, opQ Op
 }
 
 type ParallelQueryJob struct {
-	OpQ           OpQuery
-	ChResult      chan []NgramResult
-	WpoolStartIdx int
+	OpQ      OpQuery
+	ChResult chan []NgramResult
+	ValidJob bool
 }
 
-func parallelQueryWorker(ngdb *NgramDB, wpool *WorkerPool, chJobIn chan ParallelQueryJob) {
+func parallelQueryWorker(ngdb *NgramDB, wpool *WorkerPool, wpoolStartIdx int, chJobIn chan ParallelQueryJob) {
 	for {
 		select {
 		case job := <-chJobIn:
-			if job.WpoolStartIdx == -1 {
+			if !job.ValidJob {
 				job.ChResult <- nil
 			} else {
-				queryDispatcher(ngdb, wpool, job.WpoolStartIdx, job.OpQ, job.ChResult)
+				queryDispatcher(ngdb, wpool, wpoolStartIdx, job.OpQ, job.ChResult)
 			}
 		}
 	}
 }
 
-func queryBatchDispatcher(ngdb *NgramDB, wpool *WorkerPool, opQ []OpQuery) {
+func queryBatchDispatcherRoundRobin(ngdb *NgramDB, wpool *WorkerPool, opQ []OpQuery) {
 	defer timeStop(time.Now(), "qdb():"+strconv.Itoa(len(opQ)))
 
 	qsz := len(opQ)
@@ -193,15 +193,15 @@ func queryBatchDispatcher(ngdb *NgramDB, wpool *WorkerPool, opQ []OpQuery) {
 		chans = append(chans, make(chan []NgramResult, rounds))
 		chansJobs = append(chansJobs, make(chan ParallelQueryJob, rounds))
 
-		go parallelQueryWorker(ngdb, wpool, chansJobs[i])
+		go parallelQueryWorker(ngdb, wpool, i*wpool.Workers, chansJobs[i])
 	}
 
 	for qidx := 0; qidx < qsz; {
 		for parallelidx := 0; parallelidx < wpool.ParallelQ; parallelidx, qidx = parallelidx+1, qidx+1 {
 			if qidx < qsz {
-				chansJobs[parallelidx] <- ParallelQueryJob{opQ[qidx], chans[parallelidx], parallelidx * wpool.Workers}
+				chansJobs[parallelidx] <- ParallelQueryJob{opQ[qidx], chans[parallelidx], true}
 			} else {
-				chansJobs[parallelidx] <- ParallelQueryJob{OpQuery{}, chans[parallelidx], -1}
+				chansJobs[parallelidx] <- ParallelQueryJob{OpQuery{}, chans[parallelidx], false}
 			}
 		}
 	}
@@ -213,6 +213,31 @@ func queryBatchDispatcher(ngdb *NgramDB, wpool *WorkerPool, opQ []OpQuery) {
 			if localResults != nil {
 				printResults(localResults)
 			}
+		}
+	}
+}
+
+func queryBatchDispatcherSingleQueue(ngdb *NgramDB, wpool *WorkerPool, opQ []OpQuery) {
+	defer timeStop(time.Now(), "qdb():"+strconv.Itoa(len(opQ)))
+
+	qsz := len(opQ)
+
+	chansResults := make([]chan []NgramResult, 0, qsz)
+	chanJobs := make(chan ParallelQueryJob, qsz)
+	for i := 0; i < qsz; i++ {
+		chansResults = append(chansResults, make(chan []NgramResult, 1))
+		chanJobs <- ParallelQueryJob{opQ[i], chansResults[i], true}
+	}
+
+	for pidx := 0; pidx < wpool.ParallelQ; pidx++ {
+		go parallelQueryWorker(ngdb, wpool, pidx*wpool.Workers, chanJobs)
+	}
+
+	// Gather and print results
+	for qidx := 0; qidx < qsz; qidx++ {
+		localResults := <-chansResults[qidx]
+		if localResults != nil {
+			printResults(localResults)
 		}
 	}
 }
@@ -243,7 +268,8 @@ func processWorkload(in *bufio.Reader, ngdb *NgramDB, workerPool *WorkerPool, op
 			opQs = append(opQs, OpQuery{line[2:], opIdx})
 			//queryDispatcher(ngdb, workerPool, line[2:], opIdx)
 		} else if line[0] == 'F' {
-			queryBatchDispatcher(ngdb, workerPool, opQs)
+			//queryBatchDispatcherRoundRobin(ngdb, workerPool, opQs)
+			queryBatchDispatcherSingleQueue(ngdb, workerPool, opQs)
 			opQs = opQs[:0]
 
 			//lowOpIdx = opIdx
