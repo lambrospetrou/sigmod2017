@@ -45,8 +45,8 @@ type WorkerPool struct {
 }
 
 func NewWorkerPool() *WorkerPool {
-	parallelq := 40
-	numWorkers := 1
+	parallelq := 2
+	numWorkers := 2
 
 	totalWorkers := numWorkers * parallelq
 
@@ -163,7 +163,7 @@ func queryDispatcher(ngdb *NgramDB, wpool *WorkerPool, wpoolStartIdx int, opQ Op
 	chans := make([]chan []NgramResult, 0, cores)
 
 	// TODO Estimate this better based on the NGDB
-	maxLenNgram := 100
+	maxLenNgram := docSz
 
 	// The DIV might less than cores so add 1 to cover all the doc
 	batchSz := int(docSz/cores) + 1
@@ -238,6 +238,7 @@ func parallelQueryWorkerRoundBatch(ngdb *NgramDB, wpool *WorkerPool, wpoolStartI
 
 func queryBatchDispatcherRoundBatch(ngdb *NgramDB, wpool *WorkerPool, opQ []OpQuery) {
 	defer timeStop(time.Now(), "qdb():"+strconv.Itoa(len(opQ)))
+	defer timeSave(time.Now(), "qdb()")
 
 	qsz := len(opQ)
 	rounds := qsz / wpool.ParallelQ
