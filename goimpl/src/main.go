@@ -63,8 +63,8 @@ type WorkerPool struct {
 }
 
 func NewWorkerPool() *WorkerPool {
-	totalWorkers := 40
-	parallelq := 40
+	totalWorkers := 1
+	parallelq := 1
 	numWorkers := 1
 
 	pool := &WorkerPool{
@@ -149,15 +149,20 @@ func queryDispatcher(ngdb *NgramDB, wpool *WorkerPool, wpoolStartIdx int, opQ Op
 		return outputBytes(nil)
 	}
 
-	currentWorker := wpoolStartIdx
-	cores := wpool.Workers
-	chans := make([]chan []NgramResult, 0, cores)
+	workers := wpool.Workers
+	chans := make([]chan []NgramResult, 0, workers)
+
+	if workers == 1 {
+		return outputBytes(filterResults(partialQueryDoc(ngdb, doc, docSz, opIdx)))
+	}
 
 	// TODO Estimate this better based on the NGDB
 	maxLenNgram := docSz
 
+	currentWorker := wpoolStartIdx
+
 	// The DIV might less than cores so add 1 to cover all the doc
-	batchSz := int(docSz/cores) + 1
+	batchSz := int(docSz/workers) + 1
 	start := 0
 	for start < docSz {
 		startIdxEnd := int(math.Min(float64(start+batchSz), float64(docSz)))
@@ -184,7 +189,9 @@ func queryDispatcher(ngdb *NgramDB, wpool *WorkerPool, wpoolStartIdx int, opQ Op
 
 	// The master worker always does the last partial job too!
 	// masterworker
-	workerInnerJobRun(<-wpool.WorkerJobCh[currentWorker-1])
+	if currentWorker-wpoolStartIdx == workers {
+		workerInnerJobRun(<-wpool.WorkerJobCh[currentWorker-1])
+	}
 
 	// Gather, filter and return results
 	results := make([]NgramResult, 0, 16)
@@ -245,6 +252,7 @@ func queryBatchDispatcherRoundBatch(ngdb *NgramDB, wpool *WorkerPool, opQ []OpQu
 		wpool.WorkerMasterJobCh[i*wpool.Workers+wpool.Workers-1] <- WorkerMasterJob{
 			ngdb, wpool, i * wpool.Workers, chansJobs[i],
 		}
+
 	}
 
 	// Gather and print results
