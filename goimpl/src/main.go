@@ -55,8 +55,8 @@ type WorkerPool struct {
 
 func NewWorkerPool() *WorkerPool {
 	totalWorkers := 4
-	parallelq := 2
-	numWorkers := 2
+	parallelq := 4
+	numWorkers := 1
 
 	pool := &WorkerPool{
 		WorkersTotal:      totalWorkers,
@@ -81,7 +81,7 @@ func worker(chStatus chan WorkerStatus, chMasterJobIn chan WorkerMasterJob, chJo
 	for {
 		select {
 		case job := <-chJobIn:
-			job.ResultCh <- partialQueryDoc(job.Ngdb, job.Doc, job.StartIdxEnd, job.OpIdx)
+			workerInnerJobRun(job)
 			break
 		case job := <-chMasterJobIn:
 			parallelQueryWorkerRoundBatch(job.Ngdb, job.Wpool, job.WpoolStartIdx, job.ChJobIn)
@@ -94,12 +94,14 @@ func worker(chStatus chan WorkerStatus, chMasterJobIn chan WorkerMasterJob, chJo
 	}
 }
 
+func workerInnerJobRun(job WorkerJob) {
+	job.ResultCh <- partialQueryDoc(job.Ngdb, job.Doc, job.StartIdxEnd, job.OpIdx)
+}
+
 func partialQueryDoc(ngdb *NgramDB, doc string, startIdxEnd int, opIdx int) []NgramResult {
 	localResults := make([]NgramResult, 0, 64)
 
 	sz := len(doc)
-
-	//fmt.Fprintln(os.Stderr, "partial query doc", sz, startIdxEnd)
 
 	start := 0
 	end := 0
@@ -126,9 +128,7 @@ func partialQueryDoc(ngdb *NgramDB, doc string, startIdxEnd int, opIdx int) []Ng
 }
 
 func queryDispatcher(ngdb *NgramDB, wpool *WorkerPool, wpoolStartIdx int, opQ OpQuery) bytes.Buffer {
-	//defer timeSave(time.Now(), "qd()")
-
-	//timeDispatch := time.Now()
+	//defer timeStop(time.Now(), "qd()")
 
 	doc := opQ.Doc
 	opIdx := opQ.OpIdx
@@ -152,7 +152,7 @@ func queryDispatcher(ngdb *NgramDB, wpool *WorkerPool, wpoolStartIdx int, opQ Op
 
 		docEnd := int(math.Min(float64(startIdxEnd+maxLenNgram), float64(docSz)))
 
-		chRes := make(chan []NgramResult)
+		chRes := make(chan []NgramResult, 1)
 		chans = append(chans, chRes)
 
 		wpool.WorkerJobCh[currentWorker] <- WorkerJob{
@@ -167,18 +167,15 @@ func queryDispatcher(ngdb *NgramDB, wpool *WorkerPool, wpoolStartIdx int, opQ Op
 		currentWorker += 1
 	}
 
-	//timeSave(timeDispatch, "qd-dispatch")
+	// The master worker always does the last partial job too!
+	// masterworker
+	workerInnerJobRun(<-wpool.WorkerJobCh[currentWorker-1])
 
-	//timeResults := time.Now()
-
+	// Gather, filter and return results
 	results := make([]NgramResult, 0, 16)
 	for _, ch := range chans {
 		results = append(results, (<-ch)...)
 	}
-	//timeSave(timeResults, "qd-results")
-
-	//chResult <- results
-
 	return outputBytes(filterResults(results))
 }
 
@@ -188,8 +185,7 @@ type ParallelQueryJobBatch struct {
 }
 
 type ParallelQueryJob struct {
-	OpQ      OpQuery
-	ValidJob bool
+	OpQ OpQuery
 }
 
 func parallelQueryWorkerRoundBatch(ngdb *NgramDB, wpool *WorkerPool, wpoolStartIdx int, chJobIn chan ParallelQueryJobBatch) {
@@ -232,35 +228,20 @@ func queryBatchDispatcherRoundBatch(ngdb *NgramDB, wpool *WorkerPool, opQ []OpQu
 			endIdx = qsz
 		}
 		for qidx := startIdx; qidx < endIdx; qidx++ {
-			batchedJobs = append(batchedJobs, ParallelQueryJob{opQ[qidx], true})
+			batchedJobs = append(batchedJobs, ParallelQueryJob{opQ[qidx]})
 		}
 
 		//fmt.Fprintln(os.Stderr, len(batchedJobs[i]))
 		chansJobs[i] <- ParallelQueryJobBatch{batchedJobs, chansResultsBatch[i]}
 
 		// Start the worker
-		go parallelQueryWorkerRoundBatch(ngdb, wpool, i*wpool.Workers, chansJobs[i])
+		//go parallelQueryWorkerRoundBatch(ngdb, wpool, i*wpool.Workers, chansJobs[i])
+
+		// masterworker
+		wpool.WorkerMasterJobCh[i*wpool.Workers+wpool.Workers-1] <- WorkerMasterJob{
+			ngdb, wpool, i * wpool.Workers, chansJobs[i],
+		}
 	}
-
-	/*
-		timeStart := time.Now()
-
-		localResultsBatches := make([][][]NgramResult, 0, wpool.ParallelQ)
-		// Gather and print results
-		for pidx := 0; pidx < wpool.ParallelQ; pidx++ {
-			localResultsBatches = append(localResultsBatches, <-chansResultsBatch[pidx])
-		}
-
-		timeStop(timeStart, "bpr")
-
-		for pidx := 0; pidx < wpool.ParallelQ; pidx++ {
-			for _, localResults := range localResultsBatches[pidx] {
-				if localResults != nil {
-					printResults(localResults)
-				}
-			}
-		}
-	*/
 
 	// Gather and print results
 	for pidx := 0; pidx < wpool.ParallelQ; pidx++ {
