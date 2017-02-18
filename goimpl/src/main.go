@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"math"
@@ -44,19 +45,18 @@ type WorkerPool struct {
 }
 
 func NewWorkerPool() *WorkerPool {
-	parallelq := 2
-	numWorkers := runtime.NumCPU()
-	// normalize the inner workers to avoid over-threading
-	//numWorkers = numWorkers/parallelq + numWorkers%parallelq
-	numWorkers = 1
+	parallelq := 40
+	numWorkers := 1
+
+	totalWorkers := numWorkers * parallelq
 
 	pool := &WorkerPool{
 		Workers:        numWorkers,
 		ParallelQ:      parallelq,
-		WorkerJobCh:    make([]chan WorkerJob, 0, numWorkers),
-		WorkerStatusCh: make([]chan WorkerStatus, 0, numWorkers),
+		WorkerJobCh:    make([]chan WorkerJob, 0, totalWorkers),
+		WorkerStatusCh: make([]chan WorkerStatus, 0, totalWorkers),
 	}
-	for i := 0; i < numWorkers*parallelq; i++ {
+	for i := 0; i < totalWorkers; i++ {
 		pool.WorkerJobCh = append(pool.WorkerJobCh, make(chan WorkerJob, 1))
 		pool.WorkerStatusCh = append(pool.WorkerStatusCh, make(chan WorkerStatus, 1))
 
@@ -111,7 +111,24 @@ func partialQueryDoc(ngdb *NgramDB, doc string, startIdxEnd int, opIdx int) []Ng
 	return localResults
 }
 
-func queryDispatcher(ngdb *NgramDB, wpool *WorkerPool, wpoolStartIdx int, opQ OpQuery, chResult chan []NgramResult) {
+func filterResults(l []NgramResult) []NgramResult {
+	if len(l) == 0 {
+		return l
+	}
+
+	visited := make(map[string]Empty, len(l))
+	filtered := l[:0]
+	for _, r := range l {
+		if _, ok := visited[r.Term]; !ok {
+			visited[r.Term] = Empty{}
+			filtered = append(filtered, r)
+		}
+	}
+
+	return filtered
+}
+
+func queryDispatcher(ngdb *NgramDB, wpool *WorkerPool, wpoolStartIdx int, opQ OpQuery) []NgramResult {
 	//defer timeSave(time.Now(), "qd()")
 
 	//timeDispatch := time.Now()
@@ -163,33 +180,42 @@ func queryDispatcher(ngdb *NgramDB, wpool *WorkerPool, wpoolStartIdx int, opQ Op
 	}
 	//timeSave(timeResults, "qd-results")
 
-	chResult <- results
+	//chResult <- results
+
+	return filterResults(results)
+}
+
+type ParallelQueryJobBatch struct {
+	Jobs          []ParallelQueryJob
+	ChResultBatch chan [][]NgramResult
 }
 
 type ParallelQueryJob struct {
 	OpQ      OpQuery
-	ChResult chan []NgramResult
 	ValidJob bool
 }
 
-func parallelQueryWorkerRoundRobin(ngdb *NgramDB, wpool *WorkerPool, wpoolStartIdx int, chJobIn chan []ParallelQueryJob) {
+func parallelQueryWorkerRoundBatch(ngdb *NgramDB, wpool *WorkerPool, wpoolStartIdx int, chJobIn chan ParallelQueryJobBatch) {
+
+	results := make([][]NgramResult, 0, 64)
+
 	for {
 		select {
 		case jobs := <-chJobIn:
-			timeStart := time.Now()
-			for _, job := range jobs {
-				if !job.ValidJob {
-					job.ChResult <- nil
-				} else {
-					queryDispatcher(ngdb, wpool, wpoolStartIdx, job.OpQ, job.ChResult)
-				}
+			//timeStart := time.Now()
+
+			results = results[:0]
+			for _, job := range jobs.Jobs {
+				results = append(results, queryDispatcher(ngdb, wpool, wpoolStartIdx, job.OpQ))
 			}
-			timeSave(timeStart, "w()")
+			jobs.ChResultBatch <- results
+
+			//timeSave(timeStart, "w()")
 		}
 	}
 }
 
-func queryBatchDispatcherRoundRobin(ngdb *NgramDB, wpool *WorkerPool, opQ []OpQuery) {
+func queryBatchDispatcherRoundBatch(ngdb *NgramDB, wpool *WorkerPool, opQ []OpQuery) {
 	defer timeStop(time.Now(), "qdb():"+strconv.Itoa(len(opQ)))
 
 	qsz := len(opQ)
@@ -198,44 +224,62 @@ func queryBatchDispatcherRoundRobin(ngdb *NgramDB, wpool *WorkerPool, opQ []OpQu
 		rounds += 1
 	}
 
-	batchedJobs := make([][]ParallelQueryJob, 0, wpool.ParallelQ)
-
-	chansResults := make([]chan []NgramResult, 0, wpool.ParallelQ)
-	chansJobs := make([]chan []ParallelQueryJob, 0, wpool.ParallelQ)
+	chansResultsBatch := make([]chan [][]NgramResult, 0, wpool.ParallelQ)
+	chansJobs := make([]chan ParallelQueryJobBatch, 0, wpool.ParallelQ)
 	for i := 0; i < wpool.ParallelQ; i++ {
-		chansResults = append(chansResults, make(chan []NgramResult, rounds))
-		chansJobs = append(chansJobs, make(chan []ParallelQueryJob, rounds))
+		chansResultsBatch = append(chansResultsBatch, make(chan [][]NgramResult, 1))
+		chansJobs = append(chansJobs, make(chan ParallelQueryJobBatch, 1))
 
-		batchedJobs = append(batchedJobs, make([]ParallelQueryJob, 0, rounds))
+		// Create the job batch for this parallel worker
+		batchedJobs := make([]ParallelQueryJob, 0, rounds)
 
-		go parallelQueryWorkerRoundRobin(ngdb, wpool, i*wpool.Workers, chansJobs[i])
-	}
-
-	for qidx := 0; qidx < qsz; {
-		for parallelidx := 0; parallelidx < wpool.ParallelQ; parallelidx, qidx = parallelidx+1, qidx+1 {
-			if qidx < qsz {
-				batchedJobs[parallelidx] = append(batchedJobs[parallelidx], ParallelQueryJob{opQ[qidx], chansResults[parallelidx], true})
-			} else {
-				batchedJobs[parallelidx] = append(batchedJobs[parallelidx], ParallelQueryJob{OpQuery{}, chansResults[parallelidx], false})
-			}
+		startIdx := rounds * i
+		endIdx := startIdx + rounds
+		if endIdx > qsz {
+			endIdx = qsz
 		}
+		for qidx := startIdx; qidx < endIdx; qidx++ {
+			batchedJobs = append(batchedJobs, ParallelQueryJob{opQ[qidx], true})
+		}
+
+		//fmt.Fprintln(os.Stderr, len(batchedJobs[i]))
+		chansJobs[i] <- ParallelQueryJobBatch{batchedJobs, chansResultsBatch[i]}
+
+		// Start the worker
+		go parallelQueryWorkerRoundBatch(ngdb, wpool, i*wpool.Workers, chansJobs[i])
 	}
 
-	for i := 0; i < wpool.ParallelQ; i++ {
-		chansJobs[i] <- batchedJobs[i]
-	}
+	timeStart := time.Now()
 
+	localResultsBatches := make([][][]NgramResult, 0, wpool.ParallelQ)
 	// Gather and print results
-	for qidx := 0; qidx < qsz; {
-		for parallelidx := 0; parallelidx < wpool.ParallelQ; parallelidx, qidx = parallelidx+1, qidx+1 {
-			localResults := <-chansResults[parallelidx]
+	for pidx := 0; pidx < wpool.ParallelQ; pidx++ {
+		localResultsBatches = append(localResultsBatches, <-chansResultsBatch[pidx])
+	}
+
+	timeStop(timeStart, "bpr")
+
+	for pidx := 0; pidx < wpool.ParallelQ; pidx++ {
+		for _, localResults := range localResultsBatches[pidx] {
 			if localResults != nil {
 				printResults(localResults)
 			}
 		}
 	}
+	/*
+		// Gather and print results
+		for parallelidx := 0; parallelidx < wpool.ParallelQ; parallelidx++ {
+			localResultsBatch := <-chansResultsBatch[parallelidx]
+			for _, localResults := range localResultsBatch {
+				if localResults != nil {
+					printResults(localResults)
+				}
+			}
+		}
+	*/
 }
 
+/*
 func parallelQueryWorkerSingleQueue(ngdb *NgramDB, wpool *WorkerPool, wpoolStartIdx int, chJobIn chan ParallelQueryJob) {
 	for {
 		select {
@@ -276,7 +320,7 @@ func queryBatchDispatcherSingleQueue(ngdb *NgramDB, wpool *WorkerPool, opQ []OpQ
 
 	timeSave(timeQDB, "qdb-total")
 }
-
+*/
 func processWorkload(in *bufio.Reader, ngdb *NgramDB, workerPool *WorkerPool, opIdx int) *NgramDB {
 	defer timeStop(time.Now(), "process()")
 
@@ -303,7 +347,7 @@ func processWorkload(in *bufio.Reader, ngdb *NgramDB, workerPool *WorkerPool, op
 			opQs = append(opQs, OpQuery{line[2:], opIdx})
 			//queryDispatcher(ngdb, workerPool, line[2:], opIdx)
 		} else if line[0] == 'F' {
-			queryBatchDispatcherRoundRobin(ngdb, workerPool, opQs)
+			queryBatchDispatcherRoundBatch(ngdb, workerPool, opQs)
 			//queryBatchDispatcherSingleQueue(ngdb, workerPool, opQs)
 			opQs = opQs[:0]
 
@@ -373,6 +417,24 @@ func readInitial(in *bufio.Reader, ngdb *NgramDB) (*NgramDB, int) {
 }
 
 func printResults(results []NgramResult) {
+	if len(results) <= 0 {
+		fmt.Println("-1")
+		return
+	}
+
+	sepBytes := []byte("|")
+
+	var b bytes.Buffer
+
+	b.Write([]byte(results[0].Term))
+	for _, r := range results[1:] {
+		b.Write(sepBytes)
+		b.Write([]byte(r.Term))
+	}
+	b.Write([]byte("\n"))
+	b.WriteTo(os.Stdout)
+}
+func printResultsSlow(results []NgramResult) {
 	filtered := results
 	if len(filtered) <= 0 {
 		fmt.Println("-1")
