@@ -1,6 +1,7 @@
 package main
 
 import (
+//"time"
 //"fmt"
 //"os"
 )
@@ -31,7 +32,7 @@ func buildTrieNode(word string) TrieNode {
 	return TrieNode{
 		//ChildrenHash: make(map[uint16]Empty),
 		ChildrenHash: make([]bool, 1<<16, 1<<16),
-		ChildrenKeys: make(map[string]*TrieNode),
+		ChildrenKeys: make(map[string]*TrieNode, 32),
 		Word:         word,
 		Records:      make([]OpRecord, 0, 2),
 	}
@@ -42,6 +43,8 @@ func buildTrie() TrieRoot {
 }
 
 func (tn *TrieNode) IsValid(opIdx int) bool {
+	//defer timeSave(time.Now(), "IsValid()")
+
 	//fmt.Fprintln(os.Stderr, tn)
 	sz := len(tn.Records)
 
@@ -82,6 +85,8 @@ func (tn *TrieNode) AddWord(word string) *TrieNode {
 }
 
 func (tn *TrieNode) FindWord(word string) *TrieNode {
+	//defer timeSave(time.Now(), "FindWord()")
+
 	var wordHash uint16
 	if len(word) > 1 {
 		wordHash = uint16(word[0])<<8 + uint16(word[1])
