@@ -37,40 +37,54 @@ type WorkerStatus struct {
 	Status string
 }
 
+type WorkerMasterJob struct {
+	Ngdb          *NgramDB
+	Wpool         *WorkerPool
+	WpoolStartIdx int
+	ChJobIn       chan ParallelQueryJobBatch
+}
+
 type WorkerPool struct {
-	Workers        int
-	ParallelQ      int
-	WorkerJobCh    []chan WorkerJob
-	WorkerStatusCh []chan WorkerStatus
+	Workers           int
+	WorkersTotal      int
+	ParallelQ         int
+	WorkerJobCh       []chan WorkerJob
+	WorkerMasterJobCh []chan WorkerMasterJob
+	WorkerStatusCh    []chan WorkerStatus
 }
 
 func NewWorkerPool() *WorkerPool {
+	totalWorkers := 4
 	parallelq := 2
 	numWorkers := 2
 
-	totalWorkers := numWorkers * parallelq
-
 	pool := &WorkerPool{
-		Workers:        numWorkers,
-		ParallelQ:      parallelq,
-		WorkerJobCh:    make([]chan WorkerJob, 0, totalWorkers),
-		WorkerStatusCh: make([]chan WorkerStatus, 0, totalWorkers),
+		WorkersTotal:      totalWorkers,
+		Workers:           numWorkers,
+		ParallelQ:         parallelq,
+		WorkerJobCh:       make([]chan WorkerJob, 0, totalWorkers),
+		WorkerMasterJobCh: make([]chan WorkerMasterJob, 0, totalWorkers),
+		WorkerStatusCh:    make([]chan WorkerStatus, 0, totalWorkers),
 	}
 	for i := 0; i < totalWorkers; i++ {
 		pool.WorkerJobCh = append(pool.WorkerJobCh, make(chan WorkerJob, 1))
+		pool.WorkerMasterJobCh = append(pool.WorkerMasterJobCh, make(chan WorkerMasterJob, 1))
 		pool.WorkerStatusCh = append(pool.WorkerStatusCh, make(chan WorkerStatus, 1))
 
-		go worker(pool.WorkerStatusCh[i], pool.WorkerJobCh[i])
+		go worker(pool.WorkerStatusCh[i], pool.WorkerMasterJobCh[i], pool.WorkerJobCh[i])
 	}
 
 	return pool
 }
 
-func worker(chStatus chan WorkerStatus, chJobIn chan WorkerJob) {
+func worker(chStatus chan WorkerStatus, chMasterJobIn chan WorkerMasterJob, chJobIn chan WorkerJob) {
 	for {
 		select {
 		case job := <-chJobIn:
 			job.ResultCh <- partialQueryDoc(job.Ngdb, job.Doc, job.StartIdxEnd, job.OpIdx)
+			break
+		case job := <-chMasterJobIn:
+			parallelQueryWorkerRoundBatch(job.Ngdb, job.Wpool, job.WpoolStartIdx, job.ChJobIn)
 			break
 		case msg := <-chStatus:
 			if msg.Status == "terminate" {
@@ -109,44 +123,6 @@ func partialQueryDoc(ngdb *NgramDB, doc string, startIdxEnd int, opIdx int) []Ng
 	}
 
 	return localResults
-}
-
-func filterResults(l []NgramResult) []NgramResult {
-	if len(l) == 0 {
-		return l
-	}
-
-	visited := make(map[string]Empty, len(l))
-	filtered := l[:0]
-	for _, r := range l {
-		if _, ok := visited[r.Term]; !ok {
-			visited[r.Term] = Empty{}
-			filtered = append(filtered, r)
-		}
-	}
-
-	return filtered
-}
-
-func outputBytes(results []NgramResult) bytes.Buffer {
-	var b bytes.Buffer
-
-	if len(results) <= 0 {
-		b.Write([]byte("-1"))
-		b.Write([]byte("\n"))
-		return b
-	}
-
-	sepBytes := []byte("|")
-
-	b.Write([]byte(results[0].Term))
-	for _, r := range results[1:] {
-		b.Write(sepBytes)
-		b.Write([]byte(r.Term))
-	}
-	b.Write([]byte("\n"))
-
-	return b
 }
 
 func queryDispatcher(ngdb *NgramDB, wpool *WorkerPool, wpoolStartIdx int, opQ OpQuery) bytes.Buffer {
@@ -220,20 +196,15 @@ func parallelQueryWorkerRoundBatch(ngdb *NgramDB, wpool *WorkerPool, wpoolStartI
 
 	results := make([]bytes.Buffer, 0, 64)
 
-	for {
-		select {
-		case jobs := <-chJobIn:
-			//timeStart := time.Now()
+	jobs := <-chJobIn
+	//timeStart := time.Now()
 
-			results = results[:0]
-			for _, job := range jobs.Jobs {
-				results = append(results, queryDispatcher(ngdb, wpool, wpoolStartIdx, job.OpQ))
-			}
-			jobs.ChResultBatch <- results
-
-			//timeSave(timeStart, "w()")
-		}
+	for _, job := range jobs.Jobs {
+		results = append(results, queryDispatcher(ngdb, wpool, wpoolStartIdx, job.OpQ))
 	}
+	jobs.ChResultBatch <- results
+
+	//timeSave(timeStart, "w()")
 }
 
 func queryBatchDispatcherRoundBatch(ngdb *NgramDB, wpool *WorkerPool, opQ []OpQuery) {
@@ -439,4 +410,41 @@ func readInitial(in *bufio.Reader, ngdb *NgramDB) (*NgramDB, int) {
 
 func printResults(result bytes.Buffer) {
 	result.WriteTo(os.Stdout)
+}
+
+func filterResults(l []NgramResult) []NgramResult {
+	if len(l) == 0 {
+		return l
+	}
+
+	visited := make(map[string]Empty, len(l))
+	filtered := l[:0]
+	for _, r := range l {
+		if _, ok := visited[r.Term]; !ok {
+			visited[r.Term] = Empty{}
+			filtered = append(filtered, r)
+		}
+	}
+
+	return filtered
+}
+
+func outputBytes(results []NgramResult) bytes.Buffer {
+	var b bytes.Buffer
+
+	if len(results) <= 0 {
+		b.Write([]byte("-1\n"))
+		return b
+	}
+
+	sepBytes := []byte("|")
+
+	b.Write([]byte(results[0].Term))
+	for _, r := range results[1:] {
+		b.Write(sepBytes)
+		b.Write([]byte(r.Term))
+	}
+	b.Write([]byte("\n"))
+
+	return b
 }
