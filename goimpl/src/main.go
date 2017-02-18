@@ -81,7 +81,7 @@ func worker(chStatus chan WorkerStatus, chJobIn chan WorkerJob) {
 }
 
 func partialQueryDoc(ngdb *NgramDB, doc string, startIdxEnd int, opIdx int) []NgramResult {
-	localResults := make([]NgramResult, 0, 16)
+	localResults := make([]NgramResult, 0, 64)
 
 	sz := len(doc)
 
@@ -128,7 +128,28 @@ func filterResults(l []NgramResult) []NgramResult {
 	return filtered
 }
 
-func queryDispatcher(ngdb *NgramDB, wpool *WorkerPool, wpoolStartIdx int, opQ OpQuery) []NgramResult {
+func outputBytes(results []NgramResult) bytes.Buffer {
+	var b bytes.Buffer
+
+	if len(results) <= 0 {
+		b.Write([]byte("-1"))
+		b.Write([]byte("\n"))
+		return b
+	}
+
+	sepBytes := []byte("|")
+
+	b.Write([]byte(results[0].Term))
+	for _, r := range results[1:] {
+		b.Write(sepBytes)
+		b.Write([]byte(r.Term))
+	}
+	b.Write([]byte("\n"))
+
+	return b
+}
+
+func queryDispatcher(ngdb *NgramDB, wpool *WorkerPool, wpoolStartIdx int, opQ OpQuery) bytes.Buffer {
 	//defer timeSave(time.Now(), "qd()")
 
 	//timeDispatch := time.Now()
@@ -182,12 +203,12 @@ func queryDispatcher(ngdb *NgramDB, wpool *WorkerPool, wpoolStartIdx int, opQ Op
 
 	//chResult <- results
 
-	return filterResults(results)
+	return outputBytes(filterResults(results))
 }
 
 type ParallelQueryJobBatch struct {
 	Jobs          []ParallelQueryJob
-	ChResultBatch chan [][]NgramResult
+	ChResultBatch chan []bytes.Buffer
 }
 
 type ParallelQueryJob struct {
@@ -197,7 +218,7 @@ type ParallelQueryJob struct {
 
 func parallelQueryWorkerRoundBatch(ngdb *NgramDB, wpool *WorkerPool, wpoolStartIdx int, chJobIn chan ParallelQueryJobBatch) {
 
-	results := make([][]NgramResult, 0, 64)
+	results := make([]bytes.Buffer, 0, 64)
 
 	for {
 		select {
@@ -224,10 +245,10 @@ func queryBatchDispatcherRoundBatch(ngdb *NgramDB, wpool *WorkerPool, opQ []OpQu
 		rounds += 1
 	}
 
-	chansResultsBatch := make([]chan [][]NgramResult, 0, wpool.ParallelQ)
+	chansResultsBatch := make([]chan []bytes.Buffer, 0, wpool.ParallelQ)
 	chansJobs := make([]chan ParallelQueryJobBatch, 0, wpool.ParallelQ)
 	for i := 0; i < wpool.ParallelQ; i++ {
-		chansResultsBatch = append(chansResultsBatch, make(chan [][]NgramResult, 1))
+		chansResultsBatch = append(chansResultsBatch, make(chan []bytes.Buffer, 1))
 		chansJobs = append(chansJobs, make(chan ParallelQueryJobBatch, 1))
 
 		// Create the job batch for this parallel worker
@@ -249,34 +270,33 @@ func queryBatchDispatcherRoundBatch(ngdb *NgramDB, wpool *WorkerPool, opQ []OpQu
 		go parallelQueryWorkerRoundBatch(ngdb, wpool, i*wpool.Workers, chansJobs[i])
 	}
 
-	timeStart := time.Now()
-
-	localResultsBatches := make([][][]NgramResult, 0, wpool.ParallelQ)
-	// Gather and print results
-	for pidx := 0; pidx < wpool.ParallelQ; pidx++ {
-		localResultsBatches = append(localResultsBatches, <-chansResultsBatch[pidx])
-	}
-
-	timeStop(timeStart, "bpr")
-
-	for pidx := 0; pidx < wpool.ParallelQ; pidx++ {
-		for _, localResults := range localResultsBatches[pidx] {
-			if localResults != nil {
-				printResults(localResults)
-			}
-		}
-	}
 	/*
+		timeStart := time.Now()
+
+		localResultsBatches := make([][][]NgramResult, 0, wpool.ParallelQ)
 		// Gather and print results
-		for parallelidx := 0; parallelidx < wpool.ParallelQ; parallelidx++ {
-			localResultsBatch := <-chansResultsBatch[parallelidx]
-			for _, localResults := range localResultsBatch {
+		for pidx := 0; pidx < wpool.ParallelQ; pidx++ {
+			localResultsBatches = append(localResultsBatches, <-chansResultsBatch[pidx])
+		}
+
+		timeStop(timeStart, "bpr")
+
+		for pidx := 0; pidx < wpool.ParallelQ; pidx++ {
+			for _, localResults := range localResultsBatches[pidx] {
 				if localResults != nil {
 					printResults(localResults)
 				}
 			}
 		}
 	*/
+
+	// Gather and print results
+	for pidx := 0; pidx < wpool.ParallelQ; pidx++ {
+		for _, localResults := range <-chansResultsBatch[pidx] {
+			printResults(localResults)
+		}
+	}
+
 }
 
 /*
@@ -416,41 +436,6 @@ func readInitial(in *bufio.Reader, ngdb *NgramDB) (*NgramDB, int) {
 	return nil, 0 // should never come here!!!
 }
 
-func printResults(results []NgramResult) {
-	if len(results) <= 0 {
-		fmt.Println("-1")
-		return
-	}
-
-	sepBytes := []byte("|")
-
-	var b bytes.Buffer
-
-	b.Write([]byte(results[0].Term))
-	for _, r := range results[1:] {
-		b.Write(sepBytes)
-		b.Write([]byte(r.Term))
-	}
-	b.Write([]byte("\n"))
-	b.WriteTo(os.Stdout)
-}
-func printResultsSlow(results []NgramResult) {
-	filtered := results
-	if len(filtered) <= 0 {
-		fmt.Println("-1")
-		return
-	}
-
-	visited := make(map[string]Empty)
-
-	//sort.Sort(ByAppearance(filtered))
-	visited[filtered[0].Term] = Empty{}
-	fmt.Print(filtered[0].Term)
-	for _, r := range filtered[1:] {
-		if _, ok := visited[r.Term]; !ok {
-			visited[r.Term] = Empty{}
-			fmt.Print("|" + r.Term)
-		}
-	}
-	fmt.Println()
+func printResults(result bytes.Buffer) {
+	result.WriteTo(os.Stdout)
 }
