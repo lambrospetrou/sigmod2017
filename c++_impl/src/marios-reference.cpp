@@ -4,6 +4,7 @@
 #include <iterator>
 #include <sstream>
 #include <unordered_set>
+#include <unordered_map>
 
 
 
@@ -11,9 +12,10 @@ using namespace std;
 
 unordered_set<string> ngramsMap;
 
-pair<int,int> largestGram={0,0};
 
 int query1 = 1;;
+
+
 
 class Node {
 public:
@@ -43,7 +45,6 @@ public:
     void addWord(string&& s);
     Node* searchWord(string s);
     void deleteWord(string&& s);
-private:
     Node* root;
 };
 
@@ -172,263 +173,194 @@ Trie* trie = new Trie();
 string query(string document)
 {
 	unsigned docLength = document.length();
-	int largestGramLength = largestGram.first;
+	//int largestGramLength = largestGram.first;
 	unordered_set<string> checkedWords;
 
-	std::string result= "";
+	std::string result= "-1 ";
+	result.reserve(1000);
 	//doclength -1
 	string word = "";
 	int index = 1;
 	int indexChar =0;
-	bool firstTime = true;
+	bool savedIndex = false;
 	int countWords = 0;
 	checkedWords.reserve(1000);
-	//Trie *trie2 = new Trie();
+
+	//int total_words = 0;
+
+	
 	bool lastTime=false;
-	for(unsigned i =0 ; i<docLength ; i++)
-	{
-		//indexChar=i;
-		//query 50
+	bool firstTimeParse=false;
+	Node * start = trie->root;
+	int i =0;
 
-		
-
-		//Node *nd = trie->searchWord(word);
-		/**
-		*
-		*if found add the word continue to next word
-		*/
-		/*
-		if(nd != NULL && nd->wordMarker()
-			result+=word+"|";
-		}
-		*/
-
-
+	bool first = true;
+	while( i<docLength )
+	{	//if(query1 == 1 && i<600 )
+		//cerr<<" i "<<i<<" word = "<<word<<endl;
+		//resolution
 		if(document[i] == ' ' || i==docLength-1)
 		{
 
-			if(i==docLength -1 && document[i] != ' ')
+			if(i==docLength-1 && document[i]!= ' ')
 			{
-				word +=document[i];
+			word+=document[i];
+			start = start->findChild(document[i]);
 			}
 
-			countWords++;
+			if(start!=NULL && start!=trie->root)
+			{
 			
-
-			//if hello does not have pointers..
-			//then continue
-			
-			if(checkedWords.find(word) == checkedWords.end()){
-				//checkedWordVector.push_back(word);
-				//if(trie2->searchWord(word)!=NULL){
-				//cerr<<"NOT NULL"<<endl;
-				//}
-			 	//trie2->addWord(word);
-				//sort(checkedWordVector.begin(),checkedWordVector.end());
-				checkedWords.insert(word);
-				Node *nd = trie->searchWord(word);
-				if(nd != NULL && nd->wordMarker()){// trie->searchWord(word)){
-
+				if(start->wordMarker())
+				{	//auto it = checkedWords.find(word);
+					if(checkedWords.find(word) == checkedWords.end()){
+				
+						checkedWords.insert(word);
+					if(first)
+					{
+					result = word+"|";
+					first = false;
+					}
+					else{
 					result+=word+"|";
-
-				}
-				else{
-				
-
-					if(firstTime )
-					{
-
-
-						if(i!=docLength-1)
-						{
-						//just check next childern char
-
-						char nextChar = document[i+1];
-						if(nd != NULL)
-						{
-							Node * space =nd->findChild(' ');
-							if( space!=NULL)
-							{
-								if (space->findChild(nextChar)==NULL)	
-								{
-								countWords=0;
-								firstTime = true;
-								
-								word="";
-								continue;
-								}		
-							}
-							else{
-
-							countWords=0;
-								firstTime = true;
-								
-								word="";
-								continue;
-							}
-						}
-						else if(nd == NULL || nd->children().size()==0 || nd->findChild(nextChar)==NULL ){
-						countWords=0;
-						firstTime = true;
-								
-						word="";
-						continue;
-						}
-
-						}
-					
-						else
-						{
-						lastTime=true;
-						}
 					}
 					
-					
-
-				}
-				
-				
-			}
-			else{
-
-				Node *nd = trie->searchWord(word);
-
-				
-					if(firstTime )
-					{
-
-
-						if(i!=docLength-1)
-						{
-						//just check next childern char
-
-						char nextChar = document[i+1];
-						if(nd != NULL)
-						{
-							Node * space =nd->findChild(' ');
-							if( space!=NULL)
-							{
-								if (space->findChild(nextChar)==NULL)	
-								{
-								countWords=0;
-								firstTime = true;
-								
-								word="";
-								continue;
-								}		
-							}
-							else{
-
-							countWords=0;
-								firstTime = true;
-								
-								word="";
-								continue;
-							}
-						}
-						else if(nd == NULL || nd->children().size()==0 || nd->findChild(nextChar)==NULL ){
-						countWords=0;
-						firstTime = true;
-								
-						word="";
-						continue;
-						}
-
-						}
-					
-						else
-						{
-						lastTime=true;
-						}
 					}
-
-
-			}
-
-			
-			if(firstTime )
-			{
-				if(i!=docLength-1){
-				indexChar = i;
-				firstTime = false;
-				}
-				else{
-				lastTime=true;
-				}
-				
-			}
-
-
-			if(lastTime)
-			break;
+					/*else{
+					it->second++
+					}
 		
-				if (i==docLength-1)
-				{
-					countWords=0;
-									firstTime = true;
-									//mporeis na kameis substring dame tse a paeis ws tsiame p theleis anw.
-									word="";
-									i= indexChar;
-									if(i==docLength)
-									break;
-				}
-				else{
-					if(i==docLength)
-						break;
-					word +=document[i];
-				}
-			
-
-
-		}
-		else{
-			if(i==docLength)
-				break;
-			word +=document[i];
-			
-			
-			if(i!=docLength-1){
-			
-			Node *nd = trie->searchWord(word);
-			if (nd==NULL){	
-
-			countWords=0;
-			
-				if(!firstTime){
-				i= indexChar;
-				firstTime = true;
-				}
-				else{
-				//find next space or end
-
-				while(i<docLength)
-				{
-					i++;
-					if(document[i]==' '  ){
+					*/
 					
-					break;
-					}	
+				}
+				
+				start = start->findChild(document[i]);
+				
+
+				if(start==NULL)
+				{
+				
+				i++;
+					start=trie->root;
+					word = "";
+					if(savedIndex )
+			  		{
+					//cerr<<" i "<<i<<" now NULL savedindex true "<<indexChar<<endl;
+			 		 i=indexChar;
+			  		savedIndex=false;
+
+			 		 }
+			  		
+					
+				}
+				else{
+				
+				//cerr<<"space not null"<<endl;
+				i++;
+				         if(!savedIndex )
+			  		{
+					indexChar=i;
+			  		savedIndex = true;
+					}
+				
+				word.push_back(' ');
+				
+				continue;
 				}
 
-				}				
-			word="";
 			
 			}
-			
-			
+			else 
+			{
+			//cerr<<" i "<<i<<" start = null or start == root "<<endl;
+			  start=trie->root;
+			  word="";
+			  if(savedIndex )
+			  {
+				//cerr<<" i "<<i<<" start = null or start == root saved index true "<<indexChar<<endl;
+			  i=indexChar;
+			  savedIndex=false;
+
+			  }
+			  else{
+			   i++;
+			//cerr<<" i "<<i<<" start = null or start == root saved index false "<<endl;
+			  indexChar=i;
+			  savedIndex = true;
+			  }
+			  
 			}
 
 
 		}
+		//NOT A SPACE
+		else
+		{
+			//cerr<<" i "<<i<<" not a space "<<endl;
+			start = start->findChild(document[i]);
+			//start = now;
+
+			if(start==NULL)
+			{
+				//cerr<<" i "<<i<<" now null "<<endl;
+				start=trie->root;
+				word = "";
+				if(savedIndex)
+				{
+				//cerr<<" i "<<i<<" now null saved index true "<<indexChar<<endl;
+				  i=indexChar;
+			 	  savedIndex=false;
+				
+
+
+				}
+				else{
+					//cerr<<" i "<<i<<" now null saved index false "<<indexChar<<endl;
+					while(i<docLength)
+					{
+						
+						if(document[i] == ' ')
+						{
+						
+						i++;
+						break;
+						}
+						i++;
+					}
+				}
+
+			}
+			else
+			{
+			word.push_back(document[i]);
+			
+			i++;
+			}
+
+
+		}	
+		
+
+
+
+
 	}
-	//cerr<<"checked "<<checkedWords.size()<<endl;
-	if(result.length()>1){
+/*
+	for(auto word : checkedWords)
+	{
+		cerr<<"word: "<<word.first<<" count: "<<word.second<<endl;
+		
+	}
+	cerr<<endl;
+*/
+	//cerr<<"duplicates "<<total_words<<endl;
+	//if(result.length()>1){
 	result.pop_back();
 	return result;
-	}
-	else{
-	return "-1";
-	}
+	//}
+	//else{
+	//return "-1";
+	//}
 
 }
 
@@ -436,13 +368,14 @@ string query(string document)
 int main()
 {
 
-	
+	int total_words = 0;
     	int counter=1;
 
     	for (std::string line; std::getline(std::cin, line) && line != "S";) {
 		trie->addWord(std::move(line));
     	   }
-      	 
+      	 	
+	   
     	   std::cout << "R" << std::endl;
 
 
@@ -450,25 +383,38 @@ int main()
     	      for (std::string line; std::getline(std::cin, line);) {
     	         if (line == "F") {
     	            std::cout << std::flush;
+			//cerr<<endl;
+			//cerr<<endl;
     	            continue;
     	         }
 
     	         switch (line[0]) {
     	            case 'Q': {
-
-    	            	string result = query(move(line.substr(2)));
-
-    	               std::cout << result << std::endl;
-    	            //   query1++;
+			//cerr<<"Q";
+			//cerr<<line[0]<<line[1]<<line[2]<<line[3]<<endl;  
+			//if(query1 == 1)
+			//cerr<<line[1]<<line[2]<<line[3]<<endl;
+    	            	//string result =);
+			//else{
+			//	std::cout<<" SA"<<endl;
+			//}
+    	               std::cout <<  query(move(line.substr(2))) << endl;
+    	               //query1++;
+			//if (query1 ==1 )
+			
 			//cerr<<"query "<<query1<<endl;
     	               break;
     	            }
-    	            case 'A': {       
+    	            case 'A': { 
+			//cerr<<"A"; 
+			//cerr<<"adding : "<<line.substr(2)<<endl;   
+			//cerr<<line[0]<<line[1]<<line[2]<<line[3]<<endl;  
     	            	trie->addWord(move(line.substr(2)));
     	    
     	               break;
     	            }
     	            case 'D': {
+			//cerr<<"D";
     	            	trie->deleteWord(move(line.substr(2)));
     	               break;
     	            }
