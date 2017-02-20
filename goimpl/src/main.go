@@ -66,15 +66,13 @@ type WorkerPool struct {
 }
 
 func NewWorkerPool() *WorkerPool {
-	totalWorkers := 40
 	parallelq := 40
 	numWorkers := 1 // ignored now
 
 	pool := &WorkerPool{
-		MaxDocSplit:  1 << 15,
-		WorkersTotal: totalWorkers,
-		Workers:      numWorkers,
-		ParallelQ:    parallelq,
+		MaxDocSplit: 1 << 15,
+		Workers:     numWorkers,
+		ParallelQ:   parallelq,
 	}
 	return pool
 }
