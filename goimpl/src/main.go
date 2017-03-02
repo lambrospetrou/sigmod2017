@@ -66,7 +66,7 @@ type WorkerPool struct {
 }
 
 func NewWorkerPool() *WorkerPool {
-	parallelq := 40
+	parallelq := 1
 	numWorkers := 1 // ignored now
 
 	pool := &WorkerPool{
@@ -111,7 +111,7 @@ func partialQueryDoc(ngdb *NgramDB, doc string, startIdxEnd int, opIdx int) []Ng
 }
 
 // @master worker - per doc
-func queryDispatcher(ngdb *NgramDB, wpool *WorkerPool, wpoolStartIdx int, opQ OpQuery) bytes.Buffer {
+func queryDispatcher(ngdb *NgramDB, wpool *WorkerPool, opQ OpQuery) bytes.Buffer {
 	//defer timeStop(time.Now(), "qd()")
 
 	workers := wpool.Workers
@@ -173,10 +173,10 @@ func queryDispatcher(ngdb *NgramDB, wpool *WorkerPool, wpoolStartIdx int, opQ Op
 }
 
 // @master worker
-func parallelQueryWorkerRoundBatch(ngdb *NgramDB, wpool *WorkerPool, wpoolStartIdx int, jobs ParallelQueryJobBatch) {
+func parallelQueryWorkerRoundBatch(ngdb *NgramDB, wpool *WorkerPool, jobs ParallelQueryJobBatch) {
 	var bResult bytes.Buffer
 	for _, job := range jobs.Jobs {
-		lb := queryDispatcher(ngdb, wpool, wpoolStartIdx, job.OpQ)
+		lb := queryDispatcher(ngdb, wpool, job.OpQ)
 		bResult.Write(lb.Bytes())
 	}
 
@@ -229,7 +229,7 @@ func queryBatchDispatcherRoundBatch(ngdb *NgramDB, wpool *WorkerPool, opQ []OpQu
 		//fmt.Fprintln(os.Stderr, len(batchedJobs))
 
 		// Start the worker
-		go parallelQueryWorkerRoundBatch(ngdb, wpool, i*wpool.Workers, batchJob)
+		go parallelQueryWorkerRoundBatch(ngdb, wpool, batchJob)
 	}
 
 	// Gather and print results
@@ -278,7 +278,7 @@ func main() {
 	ngdb := &ngramDb
 
 	workerPool := NewWorkerPool()
-	fmt.Fprintf(os.Stderr, "cores[%d] parallelq[%d] workers[%d]\n", runtime.NumCPU(), workerPool.ParallelQ, workerPool.Workers)
+	fmt.Fprintf(os.Stderr, "cores[%d] parallelq[%d] workers[%d] maxdocsplit[%d]\n", runtime.NumCPU(), workerPool.ParallelQ, workerPool.Workers, workerPool.MaxDocSplit)
 
 	//in := bufio.NewReaderSize(os.Stdin, 1<<20)
 	in := bufio.NewReader(os.Stdin)
