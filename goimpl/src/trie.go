@@ -17,29 +17,28 @@ type OpRecord struct {
 }
 
 type TrieNode struct {
-	//ChildrenHash map[uint16]Empty
-	ChildrenHash []bool
-	ChildrenKeys map[string]*TrieNode
-	Word         string
-	Records      []OpRecord
+	ChildrenIndex []byte
+	ChildrenKeys  []*TrieNode
+	Records       []OpRecord
 }
 
 type TrieRoot struct {
 	Root TrieNode
 }
 
-func buildTrieNode(word string) TrieNode {
-	return TrieNode{
-		//ChildrenHash: make(map[uint16]Empty),
-		ChildrenHash: make([]bool, 1<<16, 1<<16),
-		ChildrenKeys: make(map[string]*TrieNode, 32),
-		Word:         word,
-		Records:      make([]OpRecord, 0, 2),
+var ChildrenTrie uint64 = 0
+
+func buildTrieNode() *TrieNode {
+	ChildrenTrie++
+	return &TrieNode{
+		ChildrenKeys:  make([]*TrieNode, 0, 2),
+		ChildrenIndex: make([]byte, 0, 2),
+		Records:       make([]OpRecord, 0, 1),
 	}
 }
 
 func buildTrie() TrieRoot {
-	return TrieRoot{buildTrieNode("_|_")}
+	return TrieRoot{*buildTrieNode()}
 }
 
 func (tn *TrieNode) IsValid(opIdx int) bool {
@@ -68,38 +67,52 @@ func (tn *TrieNode) IsValid(opIdx int) bool {
 	return false
 }
 
-func (tn *TrieNode) AddWord(word string) *TrieNode {
-	if n, ok := tn.ChildrenKeys[word]; ok {
-		return n
-	}
-	newNode := buildTrieNode(word)
-	tn.ChildrenKeys[word] = &newNode
+func (tn *TrieNode) AddString(s string) *TrieNode {
+	bs := []byte(s)
+	bsz := len(bs)
+	cNode := tn
+	cidx := 0
+	for bidx := 0; bidx < bsz; bidx++ {
+		cb := bs[bidx]
 
-	if len(word) > 1 {
-		tn.ChildrenHash[uint16(word[0])<<8+uint16(word[1])] = true
-	} else {
-		tn.ChildrenHash[uint16(word[0])] = true
-	}
+		csz := len(cNode.ChildrenIndex)
+		for cidx = 0; cidx < csz; cidx++ {
+			if cNode.ChildrenIndex[cidx] == cb {
+				break
+			}
+		}
 
-	return &newNode
+		if cidx >= csz {
+			cNode.ChildrenKeys = append(cNode.ChildrenKeys, buildTrieNode())
+			cNode.ChildrenIndex = append(cNode.ChildrenIndex, cb)
+		}
+
+		cNode = cNode.ChildrenKeys[cidx]
+	}
+	return cNode
 }
 
-func (tn *TrieNode) FindWord(word string) *TrieNode {
+func (tn *TrieNode) FindString(s string) *TrieNode {
 	//defer timeSave(time.Now(), "FindWord()")
+	bs := []byte(s)
+	bsz := len(bs)
+	cNode := tn
+	cidx := 0
+	for bidx := 0; bidx < bsz; bidx++ {
+		cb := bs[bidx]
 
-	var wordHash uint16
-	if len(word) > 1 {
-		wordHash = uint16(word[0])<<8 + uint16(word[1])
-	} else {
-		wordHash = uint16(word[0])
-	}
-	//if _, ok := tn.ChildrenHash[wordHash]; !ok {
-	if !tn.ChildrenHash[wordHash] {
-		return nil
-	}
+		csz := len(cNode.ChildrenIndex)
+		for cidx = 0; cidx < csz; cidx++ {
+			if cNode.ChildrenIndex[cidx] == cb {
+				break
+			}
+		}
 
-	if n, ok := tn.ChildrenKeys[word]; ok {
-		return n
+		if cidx >= csz {
+			return nil
+		}
+
+		cNode = cNode.ChildrenKeys[cidx]
 	}
-	return nil
+	return cNode
 }

@@ -1,7 +1,8 @@
 package main
 
 import (
-	"strings"
+//	"fmt"
+//	"os"
 )
 
 type NgramDB struct {
@@ -20,27 +21,15 @@ func NewNgramDB() NgramDB {
 }
 
 func (ngdb *NgramDB) AddNgram(ngram string, opIdx int) {
-	words := strings.Split(strings.Trim(ngram, " "), " ")
 	//fmt.Fprintln(os.Stderr, "add", words)
-
-	cNode := &ngdb.Trie.Root
-	for _, w := range words {
-		cNode = cNode.AddWord(w)
-	}
-
+	cNode := ngdb.Trie.Root.AddString(ngram)
 	cNode.Records = append(cNode.Records, OpRecord{OP_ADD, opIdx})
 }
 
 func (ngdb *NgramDB) RemoveNgram(ngram string, opIdx int) {
-	words := strings.Split(strings.Trim(ngram, " "), " ")
 	//fmt.Fprintln(os.Stderr, "rem", words)
 
-	cNode := &ngdb.Trie.Root
-	for _, w := range words {
-		if cNode = cNode.FindWord(w); cNode == nil {
-			break
-		}
-	}
+	cNode := ngdb.Trie.Root.FindString(ngram)
 	if cNode != nil {
 		cNode.Records = append(cNode.Records, OpRecord{OP_DEL, opIdx})
 	}
@@ -58,17 +47,20 @@ func (ngdb *NgramDB) FindNgrams(partialDoc string, globalStartIdx int, opIdx int
 	cNode := &ngdb.Trie.Root
 	results := make([]NgramResult, 0, 4)
 	for start < sz {
-		// find the end of the word
-		for end = start; end < sz && partialDoc[end] != ' '; end += 1 {
+		// find the end of the word by skipping spaces first and then letters
+		//for end = start; end < sz && partialDoc[end] == ' '; end += 1 {
+		//}
+		end++ // 1 space
+		for ; end < sz && partialDoc[end] != ' '; end += 1 {
 		}
 
 		if start == end { // start == end == sz
 			break
 		}
 
-		//fmt.Fprintln(os.Stderr, "find ngrams", partialDoc[:end], partialDoc[start:end], len(partialDoc[start:end]))
+		//		fmt.Fprintln(os.Stderr, "find ngrams", partialDoc[:end], partialDoc[start:end], len(partialDoc[start:end]))
 
-		cNode = cNode.FindWord(partialDoc[start:end])
+		cNode = cNode.FindString(partialDoc[start:end])
 		if cNode == nil {
 			break
 		}
@@ -82,8 +74,9 @@ func (ngdb *NgramDB) FindNgrams(partialDoc string, globalStartIdx int, opIdx int
 			})
 		}
 
-		for start = end; start < sz && partialDoc[start] == ' '; start += 1 {
-		}
+		start = end
+		//for start = end; start < sz && partialDoc[start] == ' '; start += 1 {
+		//}
 	}
 
 	return results

@@ -67,10 +67,10 @@ type WorkerPool struct {
 
 func NewWorkerPool() *WorkerPool {
 	parallelq := 1
-	numWorkers := 1 // ignored now
+	numWorkers := 0 // 2+ means allow inner splitting of docs
 
 	pool := &WorkerPool{
-		MaxDocSplit: 1 << 15,
+		MaxDocSplit: 1 << 30,
 		Workers:     numWorkers,
 		ParallelQ:   parallelq,
 	}
@@ -114,19 +114,23 @@ func partialQueryDoc(ngdb *NgramDB, doc string, startIdxEnd int, opIdx int) []Ng
 func queryDispatcher(ngdb *NgramDB, wpool *WorkerPool, opQ OpQuery) bytes.Buffer {
 	//defer timeStop(time.Now(), "qd()")
 
-	workers := wpool.Workers
+	workers := 1
 	doc := opQ.Doc
 	opIdx := opQ.OpIdx
 	docSz := len(doc)
+
+	//fmt.Fprintln(os.Stderr, "qsz", docSz)
 
 	if docSz == 0 {
 		return outputBytes(nil)
 	}
 
-	if docSz%wpool.MaxDocSplit > 0 {
-		workers = docSz/wpool.MaxDocSplit + 1
-	} else {
-		workers = docSz / wpool.MaxDocSplit
+	if wpool.Workers > 1 {
+		if docSz%wpool.MaxDocSplit > 0 {
+			workers = docSz/wpool.MaxDocSplit + 1
+		} else {
+			workers = docSz / wpool.MaxDocSplit
+		}
 	}
 
 	if workers == 1 {
@@ -286,6 +290,8 @@ func main() {
 	ngdb, opIdx := readInitial(in, ngdb)
 
 	ngdb = processWorkload(in, ngdb, workerPool, opIdx)
+
+	fmt.Fprintln(os.Stderr, "trie sz", ChildrenTrie, len(ngdb.Trie.Root.ChildrenIndex))
 }
 
 /////////////////// HELPERS /////////////////////
