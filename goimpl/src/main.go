@@ -24,6 +24,11 @@ type OpQuery struct {
 	Doc   string
 	OpIdx int
 }
+type OpUpdate struct {
+	Ngram  string
+	OpIdx  int
+	OpType byte // 0-ADD, 1-DEL
+}
 
 type ParallelQueryJobBatch struct {
 	Jobs          []ParallelQueryJob
@@ -177,14 +182,35 @@ func queryDispatcher(ngdb *NgramDB, wpool *WorkerPool, opQ OpQuery) bytes.Buffer
 }
 
 // @master worker
-func parallelQueryWorkerRoundBatch(ngdb *NgramDB, wpool *WorkerPool, jobs ParallelQueryJobBatch) {
+func parallelQueryWorkerRoundBatch(ngdb *NgramDB, wpool *WorkerPool, pqidx int, activePQ int, opQ []OpQuery, chResultBatch chan bytes.Buffer) {
+	//fmt.Fprintln(os.Stderr, "pqw()", pqidx, activePQ, len(opQ))
+
+	// calculate the portion of work
+	qsz := len(opQ)
+	rounds := qsz / activePQ
+	extraRounds := qsz % activePQ
+
+	// Uniformly divide tasks
+	var startIdx, endIdx int
+	if pqidx < extraRounds {
+		startIdx = rounds*pqidx + pqidx
+		endIdx = startIdx + rounds + 1
+	} else {
+		startIdx = rounds*pqidx + extraRounds
+		endIdx = startIdx + rounds
+	}
+	if endIdx > qsz {
+		endIdx = qsz
+	}
+
+	// Execute batch work and output result to the result channel
 	var bResult bytes.Buffer
-	for _, job := range jobs.Jobs {
-		lb := queryDispatcher(ngdb, wpool, job.OpQ)
+	for qidx := startIdx; qidx < endIdx; qidx++ {
+		lb := queryDispatcher(ngdb, wpool, opQ[qidx])
 		bResult.Write(lb.Bytes())
 	}
 
-	jobs.ChResultBatch <- bResult
+	chResultBatch <- bResult
 }
 
 // @main
@@ -203,37 +229,11 @@ func queryBatchDispatcherRoundBatch(ngdb *NgramDB, wpool *WorkerPool, opQ []OpQu
 		activePQ = qsz
 	}
 
-	rounds := qsz / activePQ
-	extraRounds := qsz % activePQ
+	chansResultsBatch := make([]chan bytes.Buffer, activePQ, activePQ)
 
-	var startIdx, endIdx int
-	chansResultsBatch := make([]chan bytes.Buffer, 0, activePQ)
 	for i := 0; i < activePQ; i++ {
-		chansResultsBatch = append(chansResultsBatch, make(chan bytes.Buffer, 1))
-
-		// Create the job batch for this parallel worker
-		batchedJobs := make([]ParallelQueryJob, 0, rounds)
-
-		// Uniformly divide tasks
-		if i < extraRounds {
-			startIdx = rounds*i + i
-			endIdx = startIdx + rounds + 1
-		} else {
-			startIdx = rounds*i + extraRounds
-			endIdx = startIdx + rounds
-		}
-		if endIdx > qsz {
-			endIdx = qsz
-		}
-		for qidx := startIdx; qidx < endIdx; qidx++ {
-			batchedJobs = append(batchedJobs, ParallelQueryJob{opQ[qidx]})
-		}
-
-		batchJob := ParallelQueryJobBatch{batchedJobs, chansResultsBatch[i]}
-		//fmt.Fprintln(os.Stderr, len(batchedJobs))
-
-		// Start the worker
-		go parallelQueryWorkerRoundBatch(ngdb, wpool, batchJob)
+		chansResultsBatch[i] = make(chan bytes.Buffer, 1)
+		go parallelQueryWorkerRoundBatch(ngdb, wpool, i, activePQ, opQ, chansResultsBatch[i])
 	}
 
 	// Gather and print results
@@ -242,10 +242,25 @@ func queryBatchDispatcherRoundBatch(ngdb *NgramDB, wpool *WorkerPool, opQ []OpQu
 	}
 }
 
+func updatesBatchDispatcher(ngdb *NgramDB, wpool *WorkerPool, opU []OpUpdate) {
+	defer timeSave(time.Now(), "ubd()")
+
+	usz := len(opU)
+	for uidx := 0; uidx < usz; uidx++ {
+		op := &opU[uidx]
+		if op.OpType == 0 {
+			ngdb.AddNgram(op.Ngram, op.OpIdx)
+		} else if op.OpType == 1 {
+			ngdb.RemoveNgram(op.Ngram, op.OpIdx)
+		}
+	}
+}
+
 func processWorkload(in *bufio.Reader, ngdb *NgramDB, workerPool *WorkerPool, opIdx int) *NgramDB {
-	defer timeStop(time.Now(), "process()")
+	defer timeSave(time.Now(), "process()")
 
 	opQs := make([]OpQuery, 0, 256)
+	opUs := make([]OpUpdate, 0, 256)
 
 	for {
 		line, err := in.ReadString('\n')
@@ -259,12 +274,19 @@ func processWorkload(in *bufio.Reader, ngdb *NgramDB, workerPool *WorkerPool, op
 		opIdx += 1
 
 		if line[0] == 'D' {
-			ngdb.RemoveNgram(line[2:], opIdx)
+			//ngdb.RemoveNgram(line[2:], opIdx)
+			opUs = append(opUs, OpUpdate{line[2:], opIdx, byte(1)})
 		} else if line[0] == 'A' {
-			ngdb.AddNgram(line[2:], opIdx)
+			//ngdb.AddNgram(line[2:], opIdx)
+			opUs = append(opUs, OpUpdate{line[2:], opIdx, byte(0)})
 		} else if line[0] == 'Q' {
 			opQs = append(opQs, OpQuery{line[2:], opIdx})
 		} else if line[0] == 'F' {
+			if len(opQs) > 0 {
+				updatesBatchDispatcher(ngdb, workerPool, opUs)
+				opUs = opUs[:0]
+			}
+
 			queryBatchDispatcherRoundBatch(ngdb, workerPool, opQs)
 			//queryBatchDispatcherSingleQueue(ngdb, workerPool, opQs)
 			opQs = opQs[:0]
