@@ -23,7 +23,7 @@ func NewNgramDB() NgramDB {
 func (ngdb *NgramDB) AddNgram(ngram string, opIdx int) {
 	//fmt.Fprintln(os.Stderr, "add", words)
 	cNode := ngdb.Trie.Root.AddString(ngram)
-	cNode.Records = append(cNode.Records, OpRecord{OP_ADD, opIdx})
+	cNode.MarkAdd(opIdx)
 }
 
 func (ngdb *NgramDB) RemoveNgram(ngram string, opIdx int) {
@@ -31,7 +31,7 @@ func (ngdb *NgramDB) RemoveNgram(ngram string, opIdx int) {
 
 	cNode := ngdb.Trie.Root.FindString(ngram)
 	if cNode != nil {
-		cNode.Records = append(cNode.Records, OpRecord{OP_DEL, opIdx})
+		cNode.MarkDel(opIdx)
 	}
 }
 

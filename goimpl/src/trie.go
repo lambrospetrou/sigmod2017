@@ -41,6 +41,13 @@ func buildTrie() TrieRoot {
 	return TrieRoot{*buildTrieNode()}
 }
 
+func (tn *TrieNode) MarkAdd(opIdx int) {
+	tn.Records = append(tn.Records, OpRecord{OP_ADD, opIdx})
+}
+func (tn *TrieNode) MarkDel(opIdx int) {
+	tn.Records = append(tn.Records, OpRecord{OP_DEL, opIdx})
+}
+
 func (tn *TrieNode) IsValid(opIdx int) bool {
 	//defer timeSave(time.Now(), "IsValid()")
 
