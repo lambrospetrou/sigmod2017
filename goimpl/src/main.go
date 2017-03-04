@@ -30,8 +30,12 @@ type OpUpdate struct {
 	OpType byte // 0-ADD, 1-DEL
 }
 
-type ParallelQueryJobBatch struct {
-	Jobs          []ParallelQueryJob
+type ParallelQueryBatchJob struct {
+	Ngdb          *NgramDB
+	Wpool         *WorkerPool
+	Pqidx         int
+	ActivePQ      int
+	OpQ           []OpQuery
 	ChResultBatch chan bytes.Buffer
 }
 
@@ -51,13 +55,6 @@ type WorkerStatus struct {
 	Status string
 }
 
-type WorkerMasterJob struct {
-	Ngdb          *NgramDB
-	Wpool         *WorkerPool
-	WpoolStartIdx int
-	ChJobIn       chan ParallelQueryJobBatch
-}
-
 type WorkerPool struct {
 	OutWriter *bufio.Writer
 
@@ -66,10 +63,6 @@ type WorkerPool struct {
 	ParallelQ    int
 
 	MaxDocSplit int
-
-	WorkerJobCh       []chan WorkerJob
-	WorkerMasterJobCh []chan WorkerMasterJob
-	WorkerStatusCh    []chan WorkerStatus
 }
 
 func NewWorkerPool() *WorkerPool {
@@ -186,7 +179,14 @@ func queryDispatcher(ngdb *NgramDB, wpool *WorkerPool, opQ OpQuery) bytes.Buffer
 }
 
 // @master worker
-func parallelQueryWorkerRoundBatch(ngdb *NgramDB, wpool *WorkerPool, pqidx int, activePQ int, opQ []OpQuery, chResultBatch chan bytes.Buffer) {
+func parallelQueryWorkerRoundBatch(job *ParallelQueryBatchJob) {
+	ngdb := job.Ngdb
+	wpool := job.Wpool
+	pqidx := job.Pqidx
+	activePQ := job.ActivePQ
+	opQ := job.OpQ
+	chResultBatch := job.ChResultBatch
+
 	//fmt.Fprintln(os.Stderr, "pqw()", pqidx, activePQ, len(opQ))
 
 	// calculate the portion of work
@@ -237,7 +237,8 @@ func queryBatchDispatcherRoundBatch(ngdb *NgramDB, wpool *WorkerPool, opQ []OpQu
 
 	for i := 0; i < activePQ; i++ {
 		chansResultsBatch[i] = make(chan bytes.Buffer, 1)
-		go parallelQueryWorkerRoundBatch(ngdb, wpool, i, activePQ, opQ, chansResultsBatch[i])
+		//go parallelQueryWorkerRoundBatch(ngdb, wpool, i, activePQ, opQ, chansResultsBatch[i])
+		go parallelQueryWorkerRoundBatch(&ParallelQueryBatchJob{ngdb, wpool, i, activePQ, opQ, chansResultsBatch[i]})
 	}
 
 	// Gather and print results
