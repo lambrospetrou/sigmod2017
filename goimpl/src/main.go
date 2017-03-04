@@ -37,7 +37,7 @@ type ParallelQueryBatchJob struct {
 	Pqidx       int
 	ActivePQ    int
 	OpQ         []OpQuery
-	ResultBatch *bytes.Buffer
+	ResultBatch **bytes.Buffer
 
 	Wg *sync.WaitGroup
 }
@@ -114,7 +114,7 @@ func partialQueryDoc(ngdb *NgramDB, doc string, startIdxEnd int, opIdx int) []Ng
 }
 
 // @master worker - per doc
-func queryDispatcher(ngdb *NgramDB, wpool *WorkerPool, opQ OpQuery) bytes.Buffer {
+func queryDispatcher(ngdb *NgramDB, wpool *WorkerPool, opQ OpQuery) []NgramResult {
 	//defer timeStop(time.Now(), "qd()")
 
 	workers := 1
@@ -125,7 +125,7 @@ func queryDispatcher(ngdb *NgramDB, wpool *WorkerPool, opQ OpQuery) bytes.Buffer
 	//fmt.Fprintln(os.Stderr, "qsz", docSz)
 
 	if docSz == 0 {
-		return outputBytes(nil)
+		return nil
 	}
 
 	if wpool.Workers > 1 {
@@ -137,7 +137,7 @@ func queryDispatcher(ngdb *NgramDB, wpool *WorkerPool, opQ OpQuery) bytes.Buffer
 	}
 
 	if workers == 1 {
-		return outputBytes(filterResults(partialQueryDoc(ngdb, doc, docSz, opIdx)))
+		return filterResults(partialQueryDoc(ngdb, doc, docSz, opIdx))
 	}
 
 	fmt.Fprintln(os.Stderr, "SHOULD NOT COME HERE", docSz)
@@ -178,7 +178,7 @@ func queryDispatcher(ngdb *NgramDB, wpool *WorkerPool, opQ OpQuery) bytes.Buffer
 	for _, ch := range chans {
 		results = append(results, (<-ch)...)
 	}
-	return outputBytes(filterResults(results))
+	return filterResults(results)
 }
 
 // @master worker
@@ -211,10 +211,13 @@ func parallelQueryWorkerRoundBatch(job *ParallelQueryBatchJob) {
 	}
 
 	// Execute batch work and output result to the result channel
-	var bResult bytes.Buffer
+	//bResult := bytes.NewBuffer(bytesArr)
+	bResult := new(bytes.Buffer)
+
+	// 1st result directly
 	for qidx := startIdx; qidx < endIdx; qidx++ {
-		lb := queryDispatcher(ngdb, wpool, opQ[qidx])
-		bResult.Write(lb.Bytes())
+		lres := queryDispatcher(ngdb, wpool, opQ[qidx])
+		outputBytesTo(lres, bResult)
 	}
 
 	*resultBatch = bResult
@@ -239,7 +242,7 @@ func queryBatchDispatcherRoundBatch(ngdb *NgramDB, wpool *WorkerPool, opQ []OpQu
 
 	var wg sync.WaitGroup
 	wg.Add(activePQ)
-	resultsBatch := make([]bytes.Buffer, activePQ, activePQ)
+	resultsBatch := make([]*bytes.Buffer, activePQ, activePQ)
 
 	for i := 0; i < activePQ; i++ {
 		//go parallelQueryWorkerRoundBatch(ngdb, wpool, i, activePQ, opQ, chansResultsBatch[i])
@@ -371,10 +374,6 @@ func readInitial(in *bufio.Reader, ngdb *NgramDB) (*NgramDB, int) {
 	return nil, 0 // should never come here!!!
 }
 
-func printResults(result bytes.Buffer) {
-	result.WriteTo(os.Stdout)
-}
-
 func filterResults(l []NgramResult) []NgramResult {
 	if len(l) == 0 {
 		return l
@@ -392,9 +391,7 @@ func filterResults(l []NgramResult) []NgramResult {
 	return filtered
 }
 
-func outputBytes(results []NgramResult) bytes.Buffer {
-	var b bytes.Buffer
-
+func outputBytesTo(results []NgramResult, b *bytes.Buffer) *bytes.Buffer {
 	if len(results) <= 0 {
 		b.Write([]byte("-1\n"))
 		return b
@@ -410,4 +407,8 @@ func outputBytes(results []NgramResult) bytes.Buffer {
 	b.Write([]byte("\n"))
 
 	return b
+}
+func outputBytes(results []NgramResult) *bytes.Buffer {
+	var b bytes.Buffer
+	return outputBytesTo(results, &b)
 }
