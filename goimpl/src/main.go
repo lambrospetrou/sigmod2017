@@ -59,6 +59,8 @@ type WorkerMasterJob struct {
 }
 
 type WorkerPool struct {
+	OutWriter *bufio.Writer
+
 	Workers      int
 	WorkersTotal int
 	ParallelQ    int
@@ -141,6 +143,8 @@ func queryDispatcher(ngdb *NgramDB, wpool *WorkerPool, opQ OpQuery) bytes.Buffer
 	if workers == 1 {
 		return outputBytes(filterResults(partialQueryDoc(ngdb, doc, docSz, opIdx)))
 	}
+
+	fmt.Fprintln(os.Stderr, "SHOULD NOT COME HERE", docSz)
 
 	// TODO Estimate this better based on the NGDB
 	//maxLenNgram := docSz
@@ -238,8 +242,10 @@ func queryBatchDispatcherRoundBatch(ngdb *NgramDB, wpool *WorkerPool, opQ []OpQu
 
 	// Gather and print results
 	for pidx := 0; pidx < activePQ; pidx++ {
-		printResults(<-chansResultsBatch[pidx])
+		pres := <-chansResultsBatch[pidx]
+		pres.WriteTo(wpool.OutWriter)
 	}
+	wpool.OutWriter.Flush()
 }
 
 func updatesBatchDispatcher(ngdb *NgramDB, wpool *WorkerPool, opU []OpUpdate) {
@@ -288,7 +294,6 @@ func processWorkload(in *bufio.Reader, ngdb *NgramDB, workerPool *WorkerPool, op
 			}
 
 			queryBatchDispatcherRoundBatch(ngdb, workerPool, opQs)
-			//queryBatchDispatcherSingleQueue(ngdb, workerPool, opQs)
 			opQs = opQs[:0]
 		}
 	}
@@ -305,6 +310,8 @@ func main() {
 
 	workerPool := NewWorkerPool()
 	fmt.Fprintf(os.Stderr, "cores[%d] parallelq[%d] workers[%d] maxdocsplit[%d]\n", runtime.NumCPU(), workerPool.ParallelQ, workerPool.Workers, workerPool.MaxDocSplit)
+
+	workerPool.OutWriter = bufio.NewWriter(os.Stdout)
 
 	//in := bufio.NewReaderSize(os.Stdin, 1<<20)
 	in := bufio.NewReader(os.Stdin)
