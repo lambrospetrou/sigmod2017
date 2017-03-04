@@ -9,6 +9,7 @@ import (
 	"os"
 	"runtime"
 	//"strconv"
+	"sync"
 	"time"
 )
 
@@ -31,12 +32,14 @@ type OpUpdate struct {
 }
 
 type ParallelQueryBatchJob struct {
-	Ngdb          *NgramDB
-	Wpool         *WorkerPool
-	Pqidx         int
-	ActivePQ      int
-	OpQ           []OpQuery
-	ChResultBatch chan bytes.Buffer
+	Ngdb        *NgramDB
+	Wpool       *WorkerPool
+	Pqidx       int
+	ActivePQ    int
+	OpQ         []OpQuery
+	ResultBatch *bytes.Buffer
+
+	Wg *sync.WaitGroup
 }
 
 type ParallelQueryJob struct {
@@ -66,7 +69,7 @@ type WorkerPool struct {
 }
 
 func NewWorkerPool() *WorkerPool {
-	parallelq := 1
+	parallelq := 40
 	numWorkers := 0 // 2+ means allow inner splitting of docs
 
 	pool := &WorkerPool{
@@ -185,7 +188,7 @@ func parallelQueryWorkerRoundBatch(job *ParallelQueryBatchJob) {
 	pqidx := job.Pqidx
 	activePQ := job.ActivePQ
 	opQ := job.OpQ
-	chResultBatch := job.ChResultBatch
+	resultBatch := job.ResultBatch
 
 	//fmt.Fprintln(os.Stderr, "pqw()", pqidx, activePQ, len(opQ))
 
@@ -214,7 +217,8 @@ func parallelQueryWorkerRoundBatch(job *ParallelQueryBatchJob) {
 		bResult.Write(lb.Bytes())
 	}
 
-	chResultBatch <- bResult
+	*resultBatch = bResult
+	job.Wg.Done()
 }
 
 // @main
@@ -233,18 +237,20 @@ func queryBatchDispatcherRoundBatch(ngdb *NgramDB, wpool *WorkerPool, opQ []OpQu
 		activePQ = qsz
 	}
 
-	chansResultsBatch := make([]chan bytes.Buffer, activePQ, activePQ)
+	var wg sync.WaitGroup
+	wg.Add(activePQ)
+	resultsBatch := make([]bytes.Buffer, activePQ, activePQ)
 
 	for i := 0; i < activePQ; i++ {
-		chansResultsBatch[i] = make(chan bytes.Buffer, 1)
 		//go parallelQueryWorkerRoundBatch(ngdb, wpool, i, activePQ, opQ, chansResultsBatch[i])
-		go parallelQueryWorkerRoundBatch(&ParallelQueryBatchJob{ngdb, wpool, i, activePQ, opQ, chansResultsBatch[i]})
+		go parallelQueryWorkerRoundBatch(&ParallelQueryBatchJob{ngdb, wpool, i, activePQ, opQ, &resultsBatch[i], &wg})
 	}
+
+	wg.Wait()
 
 	// Gather and print results
 	for pidx := 0; pidx < activePQ; pidx++ {
-		pres := <-chansResultsBatch[pidx]
-		pres.WriteTo(wpool.OutWriter)
+		resultsBatch[pidx].WriteTo(wpool.OutWriter)
 	}
 	wpool.OutWriter.Flush()
 }
