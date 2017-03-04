@@ -69,7 +69,7 @@ type WorkerPool struct {
 }
 
 func NewWorkerPool() *WorkerPool {
-	parallelq := 40
+	parallelq := 1
 	numWorkers := 0 // 2+ means allow inner splitting of docs
 
 	pool := &WorkerPool{

@@ -1,14 +1,21 @@
 package main
 
 import (
-//"time"
-//"fmt"
-//"os"
+	"time"
+	//"fmt"
+	//"os"
 )
 
 const (
 	OP_ADD = byte(0)
 	OP_DEL = byte(1)
+
+	// 2^TYPE is the number of available spaces in the node
+	TYPE_S = 1
+	TYPE_L = 3
+
+	TYPE_S_MAX = 4
+	TYPE_L_MAX = 256
 )
 
 type OpRecord struct {
@@ -20,6 +27,8 @@ type TrieNode struct {
 	ChildrenIndex []byte
 	ChildrenKeys  []*TrieNode
 	Records       []OpRecord
+
+	Type uint8
 }
 
 type TrieRoot struct {
@@ -28,13 +37,31 @@ type TrieRoot struct {
 
 var ChildrenTrie uint64 = 0
 
-func buildTrieNode() *TrieNode {
+func buildTrieNodeL() *TrieNode {
 	ChildrenTrie++
+	// default start with TYPE_S
 	return &TrieNode{
-		ChildrenKeys:  make([]*TrieNode, 0, 2),
-		ChildrenIndex: make([]byte, 0, 2),
+		ChildrenKeys:  make([]*TrieNode, TYPE_L_MAX, TYPE_L_MAX),
+		ChildrenIndex: nil,
 		Records:       make([]OpRecord, 0, 1),
+
+		Type: TYPE_L,
 	}
+}
+func buildTrieNodeS() *TrieNode {
+	ChildrenTrie++
+	// default start with TYPE_S
+	return &TrieNode{
+		ChildrenKeys:  make([]*TrieNode, 0, TYPE_S_MAX),
+		ChildrenIndex: make([]byte, 0, TYPE_S_MAX),
+		Records:       make([]OpRecord, 0, 0),
+
+		Type: TYPE_S,
+	}
+}
+
+func buildTrieNode() *TrieNode {
+	return buildTrieNodeS()
 }
 
 func buildTrie() TrieRoot {
@@ -74,6 +101,23 @@ func (tn *TrieNode) IsValid(opIdx int) bool {
 	return false
 }
 
+func (tn *TrieNode) growWith(cb byte) *TrieNode {
+	defer timeSave(time.Now(), "g")
+
+	oldKeys := append([]*TrieNode(nil), tn.ChildrenKeys...)
+	tn.ChildrenKeys = make([]*TrieNode, TYPE_L_MAX, TYPE_L_MAX)
+	for i := 0; i < len(tn.ChildrenIndex); i++ {
+		tn.ChildrenKeys[tn.ChildrenIndex[i]] = oldKeys[i]
+	}
+	tn.ChildrenIndex = nil
+
+	newNode := buildTrieNode()
+	tn.ChildrenKeys[cb] = newNode
+
+	tn.Type = TYPE_L
+
+	return newNode
+}
 func (tn *TrieNode) AddString(s string) *TrieNode {
 	bs := []byte(s)
 	bsz := len(bs)
@@ -82,19 +126,35 @@ func (tn *TrieNode) AddString(s string) *TrieNode {
 	for bidx := 0; bidx < bsz; bidx++ {
 		cb := bs[bidx]
 
-		csz := len(cNode.ChildrenIndex)
-		for cidx = 0; cidx < csz; cidx++ {
-			if cNode.ChildrenIndex[cidx] == cb {
-				break
+		switch cNode.Type {
+		case TYPE_S:
+			csz := len(cNode.ChildrenIndex)
+			for cidx = 0; cidx < csz; cidx++ {
+				if cNode.ChildrenIndex[cidx] == cb {
+					break
+				}
 			}
-		}
 
-		if cidx >= csz {
-			cNode.ChildrenKeys = append(cNode.ChildrenKeys, buildTrieNode())
-			cNode.ChildrenIndex = append(cNode.ChildrenIndex, cb)
-		}
+			if cidx >= csz {
+				if csz == TYPE_S_MAX {
+					cNode = cNode.growWith(cb)
+				} else {
+					cNode.ChildrenKeys = append(cNode.ChildrenKeys, buildTrieNode())
+					cNode.ChildrenIndex = append(cNode.ChildrenIndex, cb)
+					cNode = cNode.ChildrenKeys[cidx]
+				}
+			} else {
+				cNode = cNode.ChildrenKeys[cidx]
+			}
 
-		cNode = cNode.ChildrenKeys[cidx]
+			break
+		case TYPE_L:
+			if cNode.ChildrenKeys[cb] == nil {
+				cNode.ChildrenKeys[cb] = buildTrieNode()
+			}
+			cNode = cNode.ChildrenKeys[cb]
+			break
+		}
 	}
 	return cNode
 }
@@ -108,18 +168,28 @@ func (tn *TrieNode) FindString(s string) *TrieNode {
 	for bidx := 0; bidx < bsz; bidx++ {
 		cb := bs[bidx]
 
-		csz := len(cNode.ChildrenIndex)
-		for cidx = 0; cidx < csz; cidx++ {
-			if cNode.ChildrenIndex[cidx] == cb {
-				break
+		switch cNode.Type {
+		case TYPE_S:
+			csz := len(cNode.ChildrenIndex)
+			for cidx = 0; cidx < csz; cidx++ {
+				if cNode.ChildrenIndex[cidx] == cb {
+					break
+				}
 			}
-		}
 
-		if cidx >= csz {
-			return nil
-		}
+			if cidx >= csz {
+				return nil
+			}
 
-		cNode = cNode.ChildrenKeys[cidx]
+			cNode = cNode.ChildrenKeys[cidx]
+			break
+		case TYPE_L:
+			if cNode.ChildrenKeys[cb] == nil {
+				return nil
+			}
+			cNode = cNode.ChildrenKeys[cb]
+			break
+		}
 	}
 	return cNode
 }
