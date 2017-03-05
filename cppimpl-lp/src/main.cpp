@@ -1,4 +1,5 @@
 #include "include/Timer.hpp"
+#include "include/Trie.hpp"
 
 #include "include/cpp_btree/btree_map.h"
 #include "include/cpp_btree/btree_set.h"
@@ -48,38 +49,59 @@ struct OpUpdate {
 
 struct NgramDB {
 
-    StringSet ngrams;
+    cy::TrieRoot_t Trie;
 
     public:
 
-    NgramDB() : ngrams() {}
+    NgramDB() {}
     
-    void AddNgram(const std::string s, int opIdx) {
+    void AddNgram(const std::string& s, int opIdx) {
         //std::cerr << "a::" << s << std::endl;
-        ngrams.insert(std::move(s));
+	    auto cNode = Trie.Root.AddString(s);
+	    cNode->MarkAdd(opIdx);
     }
     
     void RemoveNgram(const std::string& s, int opIdx) {
         //std::cerr << "rem::" << s << std::endl;
-        ngrams.erase(s);
+	    auto cNode = Trie.Root.FindString(s);
+	    if (cNode) {
+		    cNode->MarkDel(opIdx);
+	    }
     }
 
-    std::vector<std::string> FindNgrams(const std::string& doc, size_t start, size_t opIdx) { 
-        std::vector<std::string> r;
-        const std::string& prefix = doc.substr(start);
-        const size_t psz = prefix.size();
-        //std::cerr << "find::" << prefix.substr(0, 20) << std::endl;
+    std::vector<std::string> FindNgrams(const std::string& doc, size_t docStart, size_t opIdx) { 
+        const size_t sz = doc.size();
+        const char* partialDoc = doc.data();
+        
+        //std::cerr << "f::" << doc.substr(0, 20) << ":" << doc.size() << ":" << sz << ":" << docStart << std::endl;
 
-        for (const std::string& ngram : ngrams) {
-            if (ngram.size() > psz) { continue; }
-            if (prefix.compare(0, ngram.size(), ngram) == 0
-                && (ngram.size() == psz || prefix[ngram.size()] == ' ') ) {
-                //std::cerr << "find::" << prefix.substr(0, 20) << " | " << ngram << std::endl;
-                r.push_back(ngram);
+        // TODO Use char* directly to the doc to avoid copying
+        std::vector<std::string> results;
+
+        size_t start = docStart;
+        for (; start<sz && partialDoc[start] == ' '; start++) {}
+        
+        size_t end = start;
+        auto cNode = &Trie.Root;
+        for (; start<sz; ) {
+            // find the end of the word by skipping spaces first and then letters
+            //for (end = start; end < sz && partialDoc[end] == ' '; end += 1) {}
+            end++; // 1 space
+            for (; end < sz && partialDoc[end] != ' '; end++) {}
+
+            if (start == end) { break; }
+            
+            cNode = cNode->FindString(doc.substr(start, end-start));
+            if (!cNode) { break; }
+
+            if (cNode->IsValid(opIdx)) {
+                results.push_back(doc.substr(docStart, end-docStart));
             }
+
+            start = end;
         }
 
-        return std::move(r);
+        return std::move(results);
     }
 };
 
@@ -142,37 +164,11 @@ void queryEvaluation(NgramDB *ngdb, const OpQuery& op) {
     outputResults(std::cout, std::move(results));
 }
 
-void queryBatchDispatcher(NgramDB *ngdb, WorkersContext *wctx, std::vector<OpQuery>& opQ) {
-    auto start = timer.getChrono();
-
-	size_t qsz{opQ.size()};
-	for (size_t qidx = 0; qidx < qsz; qidx++) {
-		const auto& op = opQ[qidx];
-        queryEvaluation(ngdb, op);
-	}
-	
-    std::cerr << "qbd::" << timer.getChrono(start) << std::endl;
-}
-
-void updatesBatchDispatcher(NgramDB *ngdb, WorkersContext *wctx, std::vector<OpUpdate>& opU) {
-    auto start = timer.getChrono();
-
-	size_t usz{opU.size()};
-	for (size_t uidx = 0; uidx < usz; uidx++) {
-		const auto& op = opU[uidx];
-		if (op.OpType == 0) {
-			ngdb->AddNgram(std::move(op.Ngram), op.OpIdx);
-		} else if (op.OpType == 1) {
-			ngdb->RemoveNgram(op.Ngram, op.OpIdx);
-		}
-	}
-	
-    std::cerr << "ubd::" << timer.getChrono(start) << std::endl;
-}
-
 void processWorkload(istream& in, NgramDB *ngdb, WorkersContext *wctx, int opIdx) {
     auto start = timer.getChrono();
     
+    uint64_t tA{0}, tD{0}, tQ{0};
+
     vector<OpQuery> opQs; opQs.reserve(256);
     vector<OpUpdate> opUs; opUs.reserve(256);
 
@@ -187,19 +183,24 @@ void processWorkload(istream& in, NgramDB *ngdb, WorkersContext *wctx, int opIdx
 		
 		opIdx++;
 
+        auto startSingle = timer.getChrono();
+        
         char type = line[0];
         switch (type) {
             case 'D':
                 //opUs.emplace_back(ss.str(), opIdx, 1);
 			    ngdb->RemoveNgram(line.substr(2), opIdx);
+                tA += timer.getChrono(startSingle);
                 break;
             case 'A':
                 //opUs.emplace_back(ss.str(), opIdx, 0);
 			    ngdb->AddNgram(line.substr(2), opIdx);
+                tD += timer.getChrono(startSingle);
                 break;
             case 'Q':
                 //opQs.emplace_back(ss.str(), opIdx);
                 queryEvaluation(ngdb, std::move(OpQuery{line.substr(2), opIdx}));
+                tQ += timer.getChrono(startSingle);
                 break;
             case 'F':
                 /*
@@ -217,7 +218,7 @@ void processWorkload(istream& in, NgramDB *ngdb, WorkersContext *wctx, int opIdx
         }
 	}
 
-	std::cerr << "proc::" << timer.getChrono(start) << std::endl;
+	std::cerr << "proc::" << timer.getChrono(start) << ":" << tA << ":" << tD << ":" << tQ << std::endl;
 }
 
 std::unique_ptr<NgramDB> readInitial(std::istream& in, int *outOpIdx) {
@@ -264,335 +265,3 @@ int main() {
     std::cerr << "main::" << timer.getChrono(start) << std::endl;
 }
 
-
-
-
-/////////////////////////////////////////////////////////////////////////////////
-
-/*
-struct Vertex {
-	EdgeContainer E;
-	uint32_t hashEdges;
-
-public:
-	Vertex() : hashEdges(0) {}
-};
-
-using VertexContainer = IntMap<Vertex*>;
-
-struct Graph {
-	VertexContainer V;
-	VertexContainer Vpred;
-
-	void updateTransitiveClosures() {
-		std::cerr << "V: " << V.size() << std::endl;
-
-		std::vector<std::pair<int, int>> vs; vs.reserve(V.size());
-		for (const auto& vp : V) {
-			vs.push_back({vp.first, vp.second->E.size()});
-		}
-
-		std::sort(vs.begin(), vs.end(), [](const std::pair<int, int>& a, const std::pair<int, int>& b) {
-			return a.second < b.second;
-		});
-
-		IntMap<uint32_t> hashed;
-
-		for (const auto& vp : vs) {
-			std::cerr << " =" << vp.first << ":" << vp.second << ":";
-			hashed[vp.first] = updateTransitiveClosureHash(vp.first, hashed);
-		}
-	}
-
-	uint32_t updateTransitiveClosureHash(int vid, IntMap<uint32_t>& hashed) {
-		std::vector<int> Q; Q.reserve(32);
-		IntSet visited;
-		visited.insert(vid);
-		Q.push_back(vid);
-		uint64_t Qidx = 0;
-
-		Vertex *v, *vSource = V[vid];
-		int cid;
-		while (Qidx < Q.size()) {
-			cid = Q[Qidx++];
-
-			v = V[cid];
-			for (const auto& k : v->E) {
-				auto it = visited.find(k);
-				if (it == visited.end()) {
-					vSource->hashEdges |= static_cast<uint32_t>(k);
-
-					visited.insert(it, k);
-					// required to avoid having vertices that do not exist
-					if (V.find(k) != V.end()) {
-
-						if (hashed.find(k) != hashed.end()) {
-							//std::cerr << "h";
-							vSource->hashEdges |= static_cast<uint32_t>(hashed[k]);
-						} else {
-							Q.push_back(k);
-						}
-					}
-				}
-			}
-		}
-		return vSource->hashEdges;
-	}	
-
-	void updateTransitiveClosureHashFromAdd(int vid) {
-		std::vector<int> Q; Q.reserve(32);
-		IntSet visited;
-		visited.insert(vid);
-		Q.push_back(vid);
-		uint64_t Qidx = 0;
-
-		Vertex *v;
-		int cid;
-		while (Qidx < Q.size()) {
-			cid = Q[Qidx++];
-
-			v = Vpred[cid];
-			for (const auto& k : v->E) {
-				auto it = visited.find(k);
-				if (it == visited.end()) {
-					visited.insert(it, k);
-					// required to avoid having vertices that do not exist
-					VertexContainer::iterator vit = Vpred.find(k);
-					if (vit != Vpred.end()) {
-						Q.push_back(k);
-						vit->second->hashEdges |= static_cast<uint32_t>(vid);
-					}
-				}
-			}
-		}
-	}	
-
-	void addEdgeWithTransitiveClosure(int from, int to) {
-		VertexContainer::iterator v;
-		if ((v = V.find(from)) == V.end()) {
-			v = V.insert(v, {from, new Vertex()});
-		}
-		v->second->E.insert(to);
-
-		if ((v = Vpred.find(to)) == Vpred.end()) {
-			v = Vpred.insert(v, {to, new Vertex()});
-		}
-		v->second->E.insert(from);
-
-		updateTransitiveClosureHashFromAdd(to);
-	}
-
-	void addEdge(int from, int to) {
-		VertexContainer::iterator v;
-		if ((v = V.find(from)) == V.end()) {
-			v = V.insert(v, {from, new Vertex()});
-		}
-		v->second->E.insert(to);
-
-		if ((v = Vpred.find(to)) == Vpred.end()) {
-			v = Vpred.insert(v, {to, new Vertex()});
-		}
-		v->second->E.insert(from);
-	}
-
-	void removeEdge(int from, int to) {
-		VertexContainer::iterator it;
-		if ((it = V.find(from)) != V.end()) {
-			it->second->E.erase(to);
-		}
-
-		if ((it = Vpred.find(to)) != Vpred.end()) {
-			it->second->E.erase(from);
-		}
-	}
-
-	int biBFS(int from, int to) {
-		std::vector<int> QF; QF.reserve(128);
-		std::vector<int> QT; QT.reserve(128);
-
-		Map<int, int> visitedF;
-		Map<int, int> visitedT;
-		
-		visitedF[from] = 0;
-		size_t QFidx = 0;
-		
-		visitedT[to] = 0;
-		size_t QTidx = 0;
-
-		Vertex *v;
-		QF.push_back(from);
-		QT.push_back(to);
-
-		while (QFidx < QF.size() && QTidx < QT.size()) {
-
-			if ( (V[QF[QFidx]]->E.size()) < (Vpred[QT[QTidx]]->E.size()) ) {
-			//the check now tries to balance visited nodes per BFS
-			//if ((QF.size()) < (QT.size())) {
-				size_t this_level = QF.size();
-				for (;QFidx < this_level;) {
-					int vid = QF[QFidx++];
-
-					int newDepth = visitedF[vid] + 1;
-
-					v = V[vid];
-					for (const auto& e : v->E) {
-						int k = e;
-						auto it = visitedF.find(k);
-						if (it == visitedF.end()) {
-							visitedF.insert(it, {k, newDepth});
-							// required to avoid having vertices that do not exist
-							if (V.find(k) != V.end()) {
-								QF.push_back(k);
-							}
-						}
-						it = visitedT.find(k);
-						if (it != visitedT.end()){
-							//std::cerr << newDepth << ":" << from << ":" << to << " : " << k << std::endl;
-							return it->second + newDepth;
-						}
-					}
-				}
-			} else {
-				size_t this_level = QT.size();
-				for (;QTidx < this_level;) {
-					int vid = QT[QTidx++];
-					int newDepth = visitedT[vid] + 1;
-
-					v = Vpred[vid];
-					for (const auto& e : v->E) {
-						int k = e;
-						auto it = visitedT.find(k);
-						if (it == visitedT.end()) {
-							visitedT.insert(it, {k, newDepth});
-							// required to avoid having vertices that do not exist
-							if (Vpred.find(k) != Vpred.end()) {
-								QT.push_back(k);
-							}
-						}
-						it = visitedF.find(k);
-						if (it != visitedF.end()){
-							return it->second + newDepth;
-						}
-					}
-				}
-			}
-
-		}
-		return -1;
-	}
-
-	int BFS(int from, int to) {
-		if (from == to) {
-			return 0;
-		}
-		VertexContainer::iterator v = V.find(from);
-		if (V.find(from) == V.end()) {
-			return -1;
-		}
-
-		if (to > 0 && ((v->second->hashEdges & static_cast<uint32_t>(to)) == 0)) {
-			return -1;
-		}
-
-		if (Vpred.find(to) == Vpred.end()) {
-			return -1;
-		}
-		//return singleBFS(from, to);
-		return biBFS(from, to);
-	}
-};
-
-std::unique_ptr<Graph> readInitialGraph() {
-	int from, to;
-	std::string line;
-	std::stringstream ss;
-
-	auto G = std::unique_ptr<Graph>(new Graph());
-	auto start = timer.getChrono();
-
-	for(;;) {
-		if (!std::getline(std::cin, line)) {
-			std::cerr << "error" << std::endl;
-			break;
-		}
-		if (line == "S") {
-			std::cerr << "loadedInitialGraph:: " << timer.getChrono(start) << std::endl;
-			break;
-		}
-		ss.clear();
-		ss.str(line);
-		ss >> from >> to;
-
-		G->addEdge(from, to);
-	}
-
-	// update the transitive closures
-	G->updateTransitiveClosures();
-	std::cerr << "finished transitive closure:: " << timer.getChrono(start) << std::endl;
-
-	std::cout << "R\n";
-
-	return std::move(G);
-}
-
-uint64_t tQ = 0, tA = 0, tD = 0;
-void executeOperation(Graph &G, char c, int from, int to) {
-	auto start = timer.getChrono();
-	switch (c) {
-	case 'Q':
-		std::cout << G.BFS(from, to) << std::endl;
-		tQ += timer.getChrono(start);
-		break;
-	case 'A':
-		G.addEdgeWithTransitiveClosure(from, to);
-		tA += timer.getChrono(start);
-		break;
-	case 'D':
-		G.removeEdge(from, to);
-		tD += timer.getChrono(start);
-		break;
-	}
-}
-
-void runExecution(Graph &G) {
-	int from, to;
-	char c;
-	std::string line;
-	std::stringstream ss;
-
-	uint64_t start = timer.getChrono();
-	uint64_t lastEnd = 0;
-	for(;;) {
-		//std::cerr << "reading..." << std::endl;
-		if (!std::getline(std::cin, line)) {
-			break;
-		}
-		//std::cerr << "read: " << line << std::endl;
-		if (line == "F") {
-			uint64_t current = timer.getChrono(start) - lastEnd;
-			lastEnd += current;
-			std::cerr << "runExecutionBatch:: " << current << std::endl;
-			continue;
-		}
-		ss.clear();
-		ss.str(line);
-		ss >> c >> from >> to;
-
-		//std::cerr << "execute:: " << c << ":" << from << ":" << to << std::endl;
-		executeOperation(G, c, from, to);
-	}
-}
-
-int main() {
-	std::ios_base::sync_with_stdio(false);
-    setvbuf(stdin, NULL, _IOFBF, 1<<20);
-
-    auto start = timer.getChrono();
-    std::unique_ptr<Graph> G = readInitialGraph();
-    std::cerr << "readInitialGraph:: " << timer.getChrono(start) << std::endl;
-
-    runExecution(*G);
-
-    std::cerr << "tQ: " << tQ << " tA: " << tA << " tD: " << tD << std::endl;
-}
-*/

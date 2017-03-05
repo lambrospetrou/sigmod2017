@@ -9,7 +9,7 @@ COMPILE_CMD=g++ -g -L./include/asm  $(RELEASE_CFLAGS) -o$@ main.cpp -lpthread -f
 all: main
 
 # just compile always anyway ;)
-main: main.cpp; 
+main: include/Trie.hpp main.cpp;
 	${COMPILE_CMD}
 
 clean:
