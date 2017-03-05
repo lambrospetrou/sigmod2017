@@ -17,9 +17,11 @@ namespace cy {
 #define TYPE_S 0
 #define TYPE_M 1
 #define TYPE_L 2
-#define TYPE_S_MAX 2
+#define TYPE_S_MAX 8
 #define TYPE_M_MAX 8
 #define TYPE_L_MAX 256
+
+    size_t NumberOfGrows = 0;
 
     struct Record_t {
         size_t OpIdx;
@@ -55,6 +57,32 @@ namespace cy {
         }
 
         ///////////// Add / Remove ////////////
+       
+        TrieNode_t* _growWith(const uint8_t cb) {
+            NumberOfGrows++;
+            switch(Type) {
+                case TYPE_S:
+                {
+                    Type = TYPE_L;
+
+                    const auto oldChildren(Children);
+                    Children.resize(0); Children.reserve(TYPE_L_MAX); Children.resize(TYPE_L_MAX, nullptr);
+                    for (size_t i=0, sz=oldChildren.size(); i<sz; i++) {
+                        Children[ChildrenIndex[i]] = oldChildren[i];
+                    }
+                    std::vector<uint8_t> empty;
+                    ChildrenIndex.swap(empty);
+
+                    TrieNode_t *newNode = new TrieNode_t();
+                    Children[cb] = newNode;
+                    
+                    return newNode;
+                }
+            }
+            std::cerr << "Aborting." << std::endl;
+            abort();
+            return nullptr;
+        }
 
         TrieNode_t* AddString(const std::string& s) {
             const size_t bsz = s.size();
@@ -76,10 +104,13 @@ namespace cy {
                             }
                         }
                         if (cidx >= csz) {
-                            // TODO Upgrade the node type if necessary
-                            cNode->Children.push_back(new TrieNode_t());
-                            childrenIndex.push_back(cb);
-                            cNode = cNode->Children.back();
+                            if (csz == TYPE_S_MAX) {
+                                cNode = cNode->_growWith(cb);
+                            } else {
+                                cNode->Children.push_back(new TrieNode_t());
+                                childrenIndex.push_back(cb);
+                                cNode = cNode->Children.back();
+                            }
                         } else {
                             cNode = cNode->Children[cidx];
                         }
@@ -148,7 +179,7 @@ namespace cy {
 
         inline void MarkAdd(size_t opIdx) { Records.emplace_back(opIdx, OP_ADD); }
         inline void MarkDel(size_t opIdx) { Records.emplace_back(opIdx, OP_DEL); }
-        bool IsValid(size_t opIdx) const {
+        inline bool IsValid(size_t opIdx) const {
             if (Records.empty()) { return false; }
             const size_t rsz = Records.size();
             
@@ -167,6 +198,10 @@ namespace cy {
 
     struct TrieRoot_t {
         TrieNode_t Root;
+
+        ~TrieRoot_t() {
+            std::cerr << "upgrades::" << NumberOfGrows << std::endl;
+        }
     };
 
 };
