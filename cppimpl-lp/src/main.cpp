@@ -13,13 +13,14 @@
 #include <sstream>
 #include <string>
 #include <algorithm>
+#include <cassert>
+
+//#define DEBUG 1
 
 cy::Timer_t timer;
 
-template<typename K, typename V> 
-using Map = btree::btree_map<K, V>;
-template<typename K, typename V> 
-using Set = btree::btree_set<K, V>;
+template<typename K, typename V> using Map = btree::btree_map<K, V>;
+template<typename K, typename V> using Set = btree::btree_set<K, V>;
 
 template<typename T>
 using IntMap = btree::btree_map<int, T>;
@@ -59,6 +60,10 @@ struct NgramDB {
         //std::cerr << "a::" << s << std::endl;
 	    auto cNode = Trie.Root.AddString(s);
 	    cNode->MarkAdd(opIdx);
+
+#ifdef DEBUG
+        assert(cNode == Trie.Root.FindString(s));
+#endif
     }
     
     void RemoveNgram(const std::string& s, int opIdx) {
@@ -70,35 +75,12 @@ struct NgramDB {
     }
 
     std::vector<std::string> FindNgrams(const std::string& doc, size_t docStart, size_t opIdx) { 
-        const size_t sz = doc.size();
-        const char* partialDoc = doc.data();
-        
-        //std::cerr << "f::" << doc.substr(0, 20) << ":" << doc.size() << ":" << sz << ":" << docStart << std::endl;
-
         // TODO Use char* directly to the doc to avoid copying
         std::vector<std::string> results;
-
-        size_t start = docStart;
-        for (; start<sz && partialDoc[start] == ' '; start++) {}
         
-        size_t end = start;
-        auto cNode = &Trie.Root;
-        for (; start<sz; ) {
-            // find the end of the word by skipping spaces first and then letters
-            //for (end = start; end < sz && partialDoc[end] == ' '; end += 1) {}
-            end++; // 1 space
-            for (; end < sz && partialDoc[end] != ' '; end++) {}
-
-            if (start == end) { break; }
-            
-            cNode = cNode->FindString(doc.substr(start, end-start));
-            if (!cNode) { break; }
-
-            if (cNode->IsValid(opIdx)) {
-                results.push_back(doc.substr(docStart, end-docStart));
-            }
-
-            start = end;
+        const auto& ngramResults = Trie.Root.FindAll(&Trie.Root, doc.data()+docStart, doc.size()-docStart, opIdx);
+        for (const auto& ngramPos : ngramResults) {
+            results.push_back(doc.substr(docStart, ngramPos));
         }
 
         return std::move(results);
@@ -190,12 +172,12 @@ void processWorkload(istream& in, NgramDB *ngdb, WorkersContext *wctx, int opIdx
             case 'D':
                 //opUs.emplace_back(ss.str(), opIdx, 1);
 			    ngdb->RemoveNgram(line.substr(2), opIdx);
-                tA += timer.getChrono(startSingle);
+                tD += timer.getChrono(startSingle);
                 break;
             case 'A':
                 //opUs.emplace_back(ss.str(), opIdx, 0);
 			    ngdb->AddNgram(line.substr(2), opIdx);
-                tD += timer.getChrono(startSingle);
+                tA += timer.getChrono(startSingle);
                 break;
             case 'Q':
                 //opQs.emplace_back(ss.str(), opIdx);
