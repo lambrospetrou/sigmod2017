@@ -17,7 +17,7 @@ namespace cy {
 #define TYPE_S 0
 #define TYPE_M 1
 #define TYPE_L 2
-#define TYPE_S_MAX 8
+#define TYPE_S_MAX 2
 #define TYPE_M_MAX 8
 #define TYPE_L_MAX 256
 
@@ -32,6 +32,7 @@ namespace cy {
     };
 
     struct TrieNode_t {
+        // TODO Refactor this to use only 1 array
         std::vector<TrieNode_t*> Children;
         std::vector<uint8_t> ChildrenIndex;
         
