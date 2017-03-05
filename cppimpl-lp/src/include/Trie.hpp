@@ -1,5 +1,16 @@
 #ifndef __CY_TRIE__
 #define __CY_TRIE__
+/**
+ * Statistics (XL dataset):
+ * 
+ * Amount   | children > X
+ *  ~70M    | <=2
+ *  ~2M     | >2
+ *  ~400K   | >4
+ *  ~175K   | >8
+ *
+ * */
+
 
 #pragma once
 
@@ -11,11 +22,12 @@
 #include <cstdint>
 #include <string>
 #include <algorithm>
+#include <map>
+
+namespace cy {
 
 template<typename K, typename V> 
 using Map = btree::btree_map<K, V>;
-
-namespace cy {
 
 #define OP_ADD 0
 #define OP_DEL 1
@@ -28,7 +40,7 @@ namespace cy {
 #define TYPE_L_MAX 256
 
 #define TYPE_X 5
-#define TYPE_X_DEPTH 12
+#define TYPE_X_DEPTH 24
 
     size_t NumberOfGrows = 0;
 

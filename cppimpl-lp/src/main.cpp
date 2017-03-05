@@ -62,7 +62,10 @@ struct NgramDB {
 	    cNode->MarkAdd(opIdx);
 
 #ifdef DEBUG
-        assert(cNode == Trie.Root.FindString(s));
+        if (cNode != Trie.Root.FindString(s)) {
+            std::cerr << "add or find is wrong!" << std::endl;
+            abort();
+        }
 #endif
     }
     
