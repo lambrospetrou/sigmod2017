@@ -74,6 +74,10 @@ struct NgramDB {
 	    }
     }
 
+    // TODO Optimization
+    // TODO Return a vector of pairs [start, end) for each ngram matched and the NGRAM's IDX (create this at each trie node)
+    // TODO this way we do not copy strings so many times and the uniqueness when printing the results will use the ngram IDX
+    // TODO for super fast hashing in the visited set, whereas now we use strings as keys!!!
     std::vector<std::string> FindNgrams(const std::string& doc, size_t docStart, size_t opIdx) { 
         // TODO Use char* directly to the doc to avoid copying
         std::vector<std::string> results;
@@ -96,6 +100,7 @@ struct WorkersContext {
 
 //////////////////////////////////////
 
+// TODO Optimization - See above to use ngram [start, end) pairs and ngram IDs
 void outputResults(std::ostream& out, const std::vector<std::string>& results) {
     if (results.empty()) {
         out << "-1" << std::endl;

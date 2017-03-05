@@ -10,6 +10,7 @@
 #include <vector>
 #include <cstdint>
 #include <string>
+#include <algorithm>
 
 template<typename K, typename V> 
 using Map = btree::btree_map<K, V>;
@@ -27,7 +28,7 @@ namespace cy {
 #define TYPE_L_MAX 256
 
 #define TYPE_X 5
-#define TYPE_X_DEPTH 9999
+#define TYPE_X_DEPTH 12
 
     size_t NumberOfGrows = 0;
 
@@ -38,6 +39,11 @@ namespace cy {
         Record_t() {}
         Record_t(size_t idx, uint8_t t) : OpIdx(idx), OpType(t) {}
     };
+
+    // TODO Optimization
+    // TODO Maybe creating an interface for the nodes, and then each type implementing that
+    // TODO interface will be faster because you will avoid the SWITCH(TYPE) in ALL the calls.
+    // TODO On the other hand, every node jumping will be a function call on that node, so it might be slower too!!!
 
     struct TrieNode_t {
         // TODO Refactor this to use only 1 array
@@ -261,32 +267,83 @@ namespace cy {
                     }
                 case TYPE_X:
                     {
-                        const std::string key(s+bidx, s+bidx+bsz);
-                        auto it = cNode->ChildrenMap.find(key);
-                        if (it == cNode->ChildrenMap.end()) {
-                            return std::move(results);
-                        }
-                        cNode = it->second; bidx = bsz;
-                        // TODO CALL THE REAL METHOD THAT FINDS THE RESULTS
-                        abort();
-                        return std::move(results);
-                        break;
+                        return _findAllTypeX(cNode, results, s, bidx, bsz, opIdx);
                     }
                 default:
                     abort();
                 }
 
+                // For Types S,M,L
                 // at the end of each word check if the ngram so far is a valid result
                 if (bs[bidx+1] == ' ' && cNode->IsValid(opIdx)) {
                     results.push_back(bidx+1);
                 }
             }
             
+            // For Types S,M,L
             // We are here it means the whole doc matched the ngram ending at cNode
             if (cNode && cNode->IsValid(opIdx)) {
                 results.emplace_back(bsz);
             }
 
+            return std::move(results);
+        }
+
+        inline static std::vector<size_t> _findAllTypeX(TrieNode_t* cNode, std::vector<size_t>& results, const char*s, size_t bidx, const size_t bsz, int opIdx) {
+            
+            // 1. Find the next word
+            // 2. Fetch the range of ngrams matching that word (lower_bound/equal_range)
+            // 3. Examine all these ngrams to be prefix of the remaining doc (s)
+            // 4. Careful!!! if a full ngram ends in the middle of a doc word
+
+            const uint8_t* bs = reinterpret_cast<const uint8_t*>(s);
+            size_t endOfWord = bidx;
+            // skip the inbetween spaces and then reach the end of the word (there is at least 1 space or 1 char)
+            for (; endOfWord < bsz && bs[endOfWord] == ' '; endOfWord++) {}
+            for (; endOfWord < bsz && bs[endOfWord] != ' '; endOfWord++) {}
+
+            const std::string firstWord(s+bidx, s+endOfWord);
+
+            auto& children = cNode->ChildrenMap;
+            auto lb = std::lower_bound(children.begin(), children.end(), firstWord, 
+                    [](const std::pair<std::string, TrieNode_t*>& ngram, const std::string& firstWord) { 
+                        return ngram.first < firstWord;
+                    });
+
+            if (lb == children.end()) {
+                //std::cerr << "No Match." << std::endl;
+                return std::move(results);
+            }
+
+            for (auto it=lb, end=children.end(); it != end; ++it) {
+                //std::cerr << "Matching...." << it->first << std::endl;
+                // We have to stop as soon as results are not prefixed with firstWord
+                if (it->first.compare(0, firstWord.size(), firstWord) != 0) {
+                    //std::cerr << "Not Matching." << std::endl;
+                    break;
+                }
+
+                const auto& ngram = it->first;
+                
+                // make sure doc can fit the ngram
+                if (ngram.size() > bsz-bidx) { continue; }
+                const size_t ngsz = ngram.size();
+                const uint8_t* cbs = bs+bidx;
+                const size_t cbssz = bsz-bidx;
+                
+                // make sure that the ngram is not ending in the middle of a word
+                if (ngsz < cbssz && cbs[ngsz] != ' ') { continue; }
+
+                bool wrong = false;
+                const uint8_t* ngbs = reinterpret_cast<const uint8_t*>(ngram.data());
+                for (size_t ngidx=0; ngidx<ngsz; ++ngidx) {
+                    if (ngbs[ngidx] != cbs[ngidx]) { wrong = true; break; }
+                }
+                if (!wrong && it->second->IsValid(opIdx)) {
+                    results.push_back(bidx + ngsz);
+                }
+            }
+            
             return std::move(results);
         }
 
