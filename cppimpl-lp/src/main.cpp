@@ -50,7 +50,7 @@ struct OpUpdate {
 
 struct NgramDB {
 
-    cy::TrieRoot_t Trie;
+    cy::trie::TrieRoot_t Trie;
 
     public:
 
@@ -58,11 +58,12 @@ struct NgramDB {
     
     void AddNgram(const std::string& s, int opIdx) {
         //std::cerr << "a::" << s << std::endl;
-	    auto cNode = Trie.Root.AddString(s);
+	    //auto cNode = Trie.Root->AddString(&Trie.Root, s);
+	    auto cNode = cy::trie::AddString(Trie.Root, s);
 	    cNode->MarkAdd(opIdx);
 
 #ifdef DEBUG
-        if (cNode != Trie.Root.FindString(s)) {
+        if (cNode != cy::trie::FindString(Trie.Root, s)) {
             std::cerr << "add or find is wrong!" << std::endl;
             abort();
         }
@@ -71,7 +72,7 @@ struct NgramDB {
     
     void RemoveNgram(const std::string& s, int opIdx) {
         //std::cerr << "rem::" << s << std::endl;
-	    auto cNode = Trie.Root.FindString(s);
+	    auto cNode = cy::trie::FindString(Trie.Root, s);
 	    if (cNode) {
 		    cNode->MarkDel(opIdx);
 	    }
@@ -85,7 +86,7 @@ struct NgramDB {
         // TODO Use char* directly to the doc to avoid copying
         std::vector<std::string> results;
         
-        const auto& ngramResults = Trie.Root.FindAll(&Trie.Root, doc.data()+docStart, doc.size()-docStart, opIdx);
+        const auto& ngramResults = cy::trie::FindAll(Trie.Root, doc.data()+docStart, doc.size()-docStart, opIdx);
         for (const auto& ngramPos : ngramResults) {
             results.push_back(doc.substr(docStart, ngramPos));
         }
