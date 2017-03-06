@@ -33,6 +33,7 @@ namespace trie {
 
     enum class OpType : uint8_t { ADD = 0, DEL = 1 };
     enum class NodeType : uint8_t { S = 0, L = 1, X = 2 };
+    constexpr NodeType DEFAULT_NODE_TYPE = NodeType::S;
 
     constexpr size_t TYPE_S_MAX = 2;
     constexpr size_t TYPE_L_MAX = 256;
@@ -54,6 +55,8 @@ namespace trie {
     size_t NumberOfGrows = 0;
     
     struct TrieNode_t {
+        TrieNode_t *_Parent;
+
         // TODO Refactor this to use only 1 array
         std::vector<TrieNode_t*> Children;
         std::vector<uint8_t> ChildrenIndex;
@@ -66,8 +69,10 @@ namespace trie {
 
         NodeType Type;
 
-        TrieNode_t() { init(NodeType::L); }
-        TrieNode_t(NodeType t) { init(t); }
+        TrieNode_t() : _Parent(nullptr) { init(DEFAULT_NODE_TYPE); }
+        TrieNode_t(NodeType t) : _Parent(nullptr) { init(t); }
+        TrieNode_t(TrieNode_t *p) : _Parent(p) { init(DEFAULT_NODE_TYPE); }
+        TrieNode_t(NodeType t, TrieNode_t *p) : _Parent(p) { init(t); }
 
         inline void init(NodeType t) {
             switch (t) {
@@ -86,11 +91,11 @@ namespace trie {
             }
         }
 
-        inline static TrieNode_t* _new(size_t depth = 0) {
+        inline static TrieNode_t* _new(TrieNode_t*p, size_t depth = 0) {
             if (depth < TYPE_X_DEPTH) {
-                return new TrieNode_t();
+                return new TrieNode_t(p);
             } else {
-                return new TrieNode_t(NodeType::X);
+                return new TrieNode_t(NodeType::X, p);
             }
         }
 
@@ -169,7 +174,7 @@ namespace trie {
                             if (csz == TYPE_S_MAX) {
                                 cNode = cNode->_growWith(cb);
                             } else {
-                                cNode->Children.push_back(TrieNode_t::_new(bidx));
+                                cNode->Children.push_back(TrieNode_t::_new(cNode, bidx));
                                 childrenIndex.push_back(cb);
                                 cNode = cNode->Children.back();
                             }
@@ -182,7 +187,7 @@ namespace trie {
                 case NodeType::L:
                     {
                         if (!cNode->Children[cb]) {
-                            cNode->Children[cb] = TrieNode_t::_new(bidx);
+                            cNode->Children[cb] = TrieNode_t::_new(cNode, bidx);
                         }
                         cNode = cNode->Children[cb];
                         break;
@@ -192,7 +197,7 @@ namespace trie {
                         const std::string key(s.substr(bidx));
                         auto it = cNode->ChildrenMap.find(key);
                         if (it == cNode->ChildrenMap.end()) {
-                            it = cNode->ChildrenMap.insert(it, {std::move(key), TrieNode_t::_new()});
+                            it = cNode->ChildrenMap.insert(it, {std::move(key), TrieNode_t::_new(cNode)});
                         }
                         cNode = it->second; bidx = bsz;
                         break;
