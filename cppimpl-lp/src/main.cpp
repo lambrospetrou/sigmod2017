@@ -82,13 +82,12 @@ struct NgramDB {
     // TODO Return a vector of pairs [start, end) for each ngram matched and the NGRAM's IDX (create this at each trie node)
     // TODO this way we do not copy strings so many times and the uniqueness when printing the results will use the ngram IDX
     // TODO for super fast hashing in the visited set, whereas now we use strings as keys!!!
-    std::vector<std::string> FindNgrams(const std::string& doc, size_t docStart, size_t opIdx) { 
+    std::vector<pair<std::string,size_t>> FindNgrams(const std::string& doc, const char *s, size_t docStart, size_t opIdx) {
         // TODO Use char* directly to the doc to avoid copying
-        std::vector<std::string> results;
-        
-        const auto& ngramResults = cy::trie::FindAll(Trie.Root, doc.data()+docStart, doc.size()-docStart, opIdx);
+        std::vector<pair<std::string,size_t>> results;
+        const auto& ngramResults = cy::trie::FindAll(Trie.Root, s, doc.size()-docStart, opIdx);
         for (const auto& ngramPos : ngramResults) {
-            results.push_back(doc.substr(docStart, ngramPos));
+            results.push_back({doc.substr(docStart, ngramPos),docStart});
         }
 
         return std::move(results);
@@ -105,29 +104,30 @@ struct WorkersContext {
 //////////////////////////////////////
 
 // TODO Optimization - See above to use ngram [start, end) pairs and ngram IDs
-void outputResults(std::ostream& out, const std::vector<std::string>& results) {
-    if (results.empty()) {
-        out << "-1" << std::endl;
-        return;
-    }
+void outputResults(std::ostream& out,
+		const std::vector<pair<std::string, size_t>>& results) {
+	if (results.empty()) {
+		out << "-1" << std::endl;
+		return;
+	}
 
-    // Filter results
-    StringSet visited;
+	// Filter results
+	StringSet visited;
 
-    std::stringstream ss;
-    ss << results[0];
-    visited.insert(results[0]);
-    for (size_t i=1,sz=results.size(); i<sz; ++i) {
-        const auto& ngram = results[i];
-        auto it = visited.find(ngram);
-        if (it == visited.end()) {
-            visited.insert(it, ngram);
-            ss << "|" << ngram;
-        }
-    }
+	std::stringstream ss;
+	ss << results[0].first;
+	visited.insert(results[0].first);
+	for (size_t i = 1, sz = results.size(); i < sz; ++i) {
+		const auto& ngram = results[i].first;
+		auto it = visited.find(ngram);
+		if (it == visited.end()) {
+			visited.insert(it, ngram);
+			ss << "|" << ngram;
+		}
+	}
 	ss << std::endl;
-    
-    out << ss.str();
+
+	out << ss.str();
 }
 
 void queryEvaluation(NgramDB *ngdb, const OpQuery& op) {
@@ -137,21 +137,33 @@ void queryEvaluation(NgramDB *ngdb, const OpQuery& op) {
 
     size_t startIdxEnd = sz;
 
-    std::vector<std::string> results;
-
+    std::vector<pair<std::string,size_t>> results;
+    std::vector<pair<const char *, size_t>> suffixArray;
+    suffixArray.reserve(10000);
     for (; start < sz; ) {
 		// find start of word
 		for (start = end; start < startIdxEnd && doc[start] == ' '; ++start) {}
         if (start >= startIdxEnd) { break; }
 
-        std::vector<std::string> cresult = ngdb->FindNgrams(doc, start, opIdx);
-        if (!cresult.empty()) {
-            results.insert(results.end(), cresult.begin(), cresult.end());
-        }
+	suffixArray.push_back( { &doc[start], start });
 		
         for (end = start; end < sz && doc[end] != ' '; ++end) {}
     }
+	std::sort(suffixArray.begin(), suffixArray.end(),
+			[](const pair<const char *, size_t>& lhs, const pair<const char *, size_t>& rhs) {
+				return strcmp(lhs.first, rhs.first) < 0;});
 
+	for (const auto & suffix : suffixArray) {
+		std::vector<pair<std::string, size_t>> cresult = ngdb->FindNgrams(doc, suffix.first, suffix.second, opIdx);
+		if (!cresult.empty()) {
+			results.insert(results.end(), cresult.begin(), cresult.end());
+		}
+
+	}
+
+	std::sort(results.begin(), results.end(),
+			[](const pair<std::string, size_t>& lhs, const pair<std::string, size_t>& rhs) {
+				return (lhs.second < rhs.second) || ((lhs.second == rhs.second) && lhs.first.size() < rhs.first.size());});
     outputResults(std::cout, std::move(results));
 }
 
