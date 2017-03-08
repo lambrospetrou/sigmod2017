@@ -4,7 +4,7 @@
  * Statistics (XL dataset):
  * 
  * Amount   | children
- *  ~70M    | <=2
+ *  ~700M    | <=2
  *  ~2M     | >2
  *  ~400K   | >4
  *  ~175K   | >8
@@ -35,10 +35,13 @@ namespace trie {
     enum class NodeType : uint8_t { S = 0, L = 1, X = 2 };
     constexpr NodeType DEFAULT_NODE_TYPE = NodeType::S;
 
-    constexpr size_t TYPE_S_MAX = 2;
+    constexpr size_t TYPE_S_MAX = 4;
     constexpr size_t TYPE_L_MAX = 256;
     constexpr size_t TYPE_X_DEPTH = 24;
 
+    size_t NumberOfGrows = 0;
+    size_t NumberOfNodes = 0;
+    
     struct Record_t {
         size_t OpIdx;
         OpType Type; // 0-Add, 1-Delete
@@ -52,22 +55,36 @@ namespace trie {
     // TODO interface will be faster because you will avoid the SWITCH(TYPE) in ALL the calls.
     // TODO On the other hand, every node jumping will be a function call on that node, so it might be slower too!!!
 
-    size_t NumberOfGrows = 0;
     
+    struct TrieNode_t;
+
+    template<size_t SIZE>
+    struct DataS {
+        static constexpr size_t INDEX_SIZE = sizeof(uint8_t) * SIZE;
+
+        uint8_t ChildrenIndex[INDEX_SIZE + sizeof(TrieNode_t**)*SIZE];
+        TrieNode_t** Children;
+        size_t Size;
+
+        DataS() : Children(reinterpret_cast<TrieNode_t**>(ChildrenIndex + INDEX_SIZE)), Size(0) {}
+    };
+
+    struct DataL {
+        std::vector<TrieNode_t*> Children;
+    };
+
     struct TrieNode_t {
+        NodeType Type;
         TrieNode_t *_Parent;
 
-        // TODO Refactor this to use only 1 array
-        std::vector<TrieNode_t*> Children;
-        std::vector<uint8_t> ChildrenIndex;
-
+        DataS<TYPE_S_MAX> DtS;
+        DataL DtL;
+        
         // TODO Optimization
         // TODO Create a custom String class that does not copy the contents of the char* for each key
         Map< std::string, TrieNode_t*> ChildrenMap;
 
-        std::vector<Record_t> Records; // allow parallel batched queries
 
-        NodeType Type;
 
         TrieNode_t() : _Parent(nullptr) { init(DEFAULT_NODE_TYPE); }
         TrieNode_t(NodeType t) : _Parent(nullptr) { init(t); }
@@ -78,12 +95,10 @@ namespace trie {
             switch (t) {
                 case NodeType::S:
                     Type = NodeType::S;
-                    Children.reserve(TYPE_S_MAX);    
-                    ChildrenIndex.reserve(TYPE_S_MAX);    
                     break;
                 case NodeType::L:
                     Type = NodeType::L;
-                    Children.resize(TYPE_L_MAX, nullptr);
+                    DtL.Children.reserve(TYPE_L_MAX); DtL.Children.resize(TYPE_L_MAX, nullptr);
                     break;
                 case NodeType::X:
                     Type = NodeType::X;
@@ -92,6 +107,7 @@ namespace trie {
         }
 
         inline static TrieNode_t* _new(TrieNode_t*p, size_t depth = 0) {
+            NumberOfNodes++;
             if (depth < TYPE_X_DEPTH) {
                 return new TrieNode_t(p);
             } else {
@@ -101,37 +117,26 @@ namespace trie {
 
         ///////////// Add / Remove ////////////
 
-        TrieNode_t* _growWith(const uint8_t cb) {
+        TrieNode_t* _growTypeSWith(const uint8_t cb) {
             NumberOfGrows++;
-            switch(Type) {
-                case NodeType::S:
-                    {
-                        Type = NodeType::L;
+            
+            Type = NodeType::L;
 
-                        const auto oldChildren(Children);
-                        Children.resize(0); Children.reserve(TYPE_L_MAX); Children.resize(TYPE_L_MAX, nullptr);
-                        for (size_t i=0, sz=oldChildren.size(); i<sz; i++) {
-                            Children[ChildrenIndex[i]] = oldChildren[i];
-                        }
-                        std::vector<uint8_t> empty;
-                        ChildrenIndex.swap(empty);
-
-                        TrieNode_t *newNode = new TrieNode_t();
-                        Children[cb] = newNode;
-
-                        return newNode;
-                    }
-                default:
-                    std::cerr << "Aborting:: not supported _growWith()." << std::endl;
-                    abort();
+            DtL.Children.reserve(TYPE_L_MAX); DtL.Children.resize(TYPE_L_MAX, nullptr);
+            for (size_t i=0, sz=TYPE_S_MAX; i<sz; i++) {
+                DtL.Children[DtS.ChildrenIndex[i]] = DtS.Children[i];
             }
-            std::cerr << "Aborting." << std::endl;
-            abort();
-            return nullptr;
+
+            TrieNode_t *newNode = new TrieNode_t(this);
+            DtL.Children[cb] = newNode;
+
+            return newNode;
         }
 
 
         ///////////// Updates related /////////////
+        
+        std::vector<Record_t> Records; // allow parallel batched queries
 
         inline void MarkAdd(size_t opIdx) { Records.emplace_back(opIdx, OpType::ADD); }
         inline void MarkDel(size_t opIdx) { Records.emplace_back(opIdx, OpType::DEL); }
@@ -163,8 +168,8 @@ namespace trie {
                 case NodeType::S:
                     {
                         size_t cidx;
-                        auto& childrenIndex = cNode->ChildrenIndex;
-                        const size_t csz = childrenIndex.size();
+                        auto& childrenIndex = cNode->DtS.ChildrenIndex;
+                        const size_t csz = cNode->DtS.Size;
                         for (cidx = 0; cidx<csz; cidx++) {
                             if (childrenIndex[cidx] == cb) {
                                 break;
@@ -172,24 +177,24 @@ namespace trie {
                         }
                         if (cidx >= csz) {
                             if (csz == TYPE_S_MAX) {
-                                cNode = cNode->_growWith(cb);
+                                cNode = cNode->_growTypeSWith(cb);
                             } else {
-                                cNode->Children.push_back(TrieNode_t::_new(cNode, bidx));
-                                childrenIndex.push_back(cb);
-                                cNode = cNode->Children.back();
+                                cNode->DtS.Children[cNode->DtS.Size++] = TrieNode_t::_new(cNode, bidx);
+                                childrenIndex[csz] = cb;
+                                cNode = cNode->DtS.Children[csz];
                             }
                         } else {
-                            cNode = cNode->Children[cidx];
+                            cNode = cNode->DtS.Children[cidx];
                         }
 
                         break;
                     }
                 case NodeType::L:
                     {
-                        if (!cNode->Children[cb]) {
-                            cNode->Children[cb] = TrieNode_t::_new(cNode, bidx);
+                        if (!cNode->DtL.Children[cb]) {
+                            cNode->DtL.Children[cb] = TrieNode_t::_new(cNode, bidx);
                         }
-                        cNode = cNode->Children[cb];
+                        cNode = cNode->DtL.Children[cb];
                         break;
                     }
                 case NodeType::X:
@@ -222,8 +227,8 @@ namespace trie {
                 case NodeType::S:
                     {
                         size_t cidx;
-                        const auto& childrenIndex = cNode->ChildrenIndex;
-                        const size_t csz = childrenIndex.size();
+                        const auto& childrenIndex = cNode->DtS.ChildrenIndex;
+                        const size_t csz = cNode->DtS.Size;
                         for (cidx = 0; cidx<csz; cidx++) {
                             if (childrenIndex[cidx] == cb) {
                                 break;
@@ -233,15 +238,15 @@ namespace trie {
                             return nullptr;
                         }
 
-                        cNode = cNode->Children[cidx];
+                        cNode = cNode->DtS.Children[cidx];
                         break;
                     }
                 case NodeType::L:
                     {
-                        if (!cNode->Children[cb]) {
+                        if (!cNode->DtL.Children[cb]) {
                             return nullptr;
                         }
-                        cNode = cNode->Children[cb];
+                        cNode = cNode->DtL.Children[cb];
                         break;
                     }
                 case NodeType::X:
@@ -335,8 +340,8 @@ namespace trie {
                 case NodeType::S:
                     {
                         size_t cidx;
-                        const auto& childrenIndex = cNode->ChildrenIndex;
-                        const size_t csz = childrenIndex.size();
+                        const auto& childrenIndex = cNode->DtS.ChildrenIndex;
+                        const size_t csz = cNode->DtS.Size;
                         for (cidx = 0; cidx<csz; cidx++) {
                             if (childrenIndex[cidx] == cb) {
                                 break;
@@ -346,15 +351,15 @@ namespace trie {
                             return std::move(results);
                         }
 
-                        cNode = cNode->Children[cidx];
+                        cNode = cNode->DtS.Children[cidx];
                         break;
                     }
                 case NodeType::L:
                     {
-                        if (!cNode->Children[cb]) {
+                        if (!cNode->DtL.Children[cb]) {
                             return std::move(results);
                         }
-                        cNode = cNode->Children[cb];
+                        cNode = cNode->DtL.Children[cb];
                         break;
                     }
                 case NodeType::X:
@@ -386,11 +391,11 @@ namespace trie {
         TrieNode_t *Root;
 
         TrieRoot_t() {
-            Root = new TrieNode_t();
+            Root = TrieNode_t::_new(nullptr, 0);
             if (Root == nullptr) { abort(); }
         }
         ~TrieRoot_t() {
-            std::cerr << "upgrades::" << NumberOfGrows << std::endl;
+            std::cerr << "upgrades::" << NumberOfGrows << " #nodes::" << NumberOfNodes << std::endl;
             delete Root;
         }
     };
