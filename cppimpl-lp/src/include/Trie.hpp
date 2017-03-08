@@ -387,18 +387,61 @@ namespace trie {
     }
 
 
+    size_t xChMin = 999999, xChMax = 0, xChTotal = 0, xTotal = 0, xCh0 = 0;
+    static void _takeAnalytics(TrieNode_t *cNode) {
+        switch(cNode->Type) {
+            case NodeType::S:
+                {
+                    const size_t csz = cNode->DtS.Size;
+                    for (size_t cidx = 0; cidx<csz; cidx++) {
+                        _takeAnalytics(cNode->DtS.Children[cidx]);
+                    }
+                    break;
+                }
+            case NodeType::L:
+                {
+                    const auto& children = cNode->DtL.Children;
+                    for (size_t cidx = 0; cidx<TYPE_L_MAX; cidx++) {
+                        if (children[cidx]) {
+                            _takeAnalytics(children[cidx]);
+                        }
+                    }
+                    break;
+                }
+            case NodeType::X:
+                {
+                    xTotal++;
+                    const size_t chsz = cNode->ChildrenMap.size();
+                    xChTotal += chsz;
+                    if (chsz == 0) { xCh0++; }
+                    if (chsz < xChMin) { xChMin = chsz; }
+                    if (chsz > xChMax) { xChMax = chsz; }
+
+                    break;
+                }
+            default:
+                abort();
+        }
+    }
+
     struct TrieRoot_t {
         TrieNode_t *Root;
 
         TrieRoot_t() {
+            std::cerr << "S" << TYPE_S_MAX << " L" << TYPE_L_MAX << " X" << TYPE_X_DEPTH << std::endl;
             Root = TrieNode_t::_new(nullptr, 0);
             if (Root == nullptr) { abort(); }
         }
         ~TrieRoot_t() {
             std::cerr << "upgrades::" << NumberOfGrows << " #nodes::" << NumberOfNodes << std::endl;
+
+            _takeAnalytics(Root);
+            std::cerr << "MAP::" << xTotal << "::" << xCh0 << "::" << xChMin << "::" << xChMax << "::" << (xChTotal*1.0/xTotal) << std::endl;
+
             delete Root;
         }
     };
+
 
 };
 };
