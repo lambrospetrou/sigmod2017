@@ -23,6 +23,7 @@
 #include <string>
 #include <algorithm>
 #include <map>
+#include <cstring>
 
 namespace cy {
 namespace trie {
@@ -291,12 +292,13 @@ namespace trie {
         for (; endOfWord < bsz && bs[endOfWord] == ' '; endOfWord++) {}
         for (; endOfWord < bsz && bs[endOfWord] != ' '; endOfWord++) {}
 
-        const std::string firstWord(s+bidx, s+endOfWord);
+        const std::pair<const char*, const char*> firstWord{s+bidx, s+endOfWord};
+        const size_t firstWordSz = endOfWord-bidx;
 
         auto& children = cNode->ChildrenMap;
         auto lb = std::lower_bound(children.begin(), children.end(), firstWord, 
-                [](const std::pair<std::string, TrieNode_t*>& ngram, const std::string& firstWord) { 
-                return ngram.first < firstWord;
+                [firstWordSz](const std::pair<std::string, TrieNode_t*>& ngram, const std::pair<const char*, const char*>& firstWord) { 
+                    return std::strncmp(ngram.first.c_str(), firstWord.first, firstWordSz) < 0;
                 });
 
         if (lb == children.end()) {
@@ -307,8 +309,8 @@ namespace trie {
         for (auto it=lb, end=children.end(); it != end; ++it) {
             //std::cerr << "Matching...." << it->first << std::endl;
             // We have to stop as soon as results are not prefixed with firstWord
-            if (it->first.compare(0, firstWord.size(), firstWord) != 0) {
-                //std::cerr << "Not Matching." << std::endl;
+            
+            if (std::strncmp(it->first.c_str(), firstWord.first, firstWordSz) != 0) {
                 break;
             }
 
@@ -323,12 +325,7 @@ namespace trie {
             // make sure that the ngram is not ending in the middle of a word
             if (ngsz < cbssz && cbs[ngsz] != ' ') { continue; }
 
-            bool wrong = false;
-            const uint8_t* ngbs = reinterpret_cast<const uint8_t*>(ngram.data());
-            for (size_t ngidx=0; ngidx<ngsz; ++ngidx) {
-                if (ngbs[ngidx] != cbs[ngidx]) { wrong = true; break; }
-            }
-            if (!wrong && it->second->IsValid(opIdx)) {
+            if ((std::strncmp(ngram.c_str()+firstWordSz, firstWord.first+firstWordSz, ngsz-firstWordSz) == 0) && it->second->IsValid(opIdx)) {
                 results.push_back(bidx + ngsz);
             }
         }
