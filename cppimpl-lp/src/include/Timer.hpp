@@ -6,6 +6,9 @@
 #include <iostream>
 #include <sys/time.h>
 
+#include <chrono>
+#include <thread>
+
 namespace cy {
 
     struct Timer_t {
@@ -24,6 +27,10 @@ namespace cy {
         inline uint64_t getChrono(uint64_t start) {
             return getChronoMicro(start);
         } 
+
+        inline void sleep_for(size_t seconds) {
+            std::this_thread::sleep_for(std::chrono::seconds(seconds));
+        }
     };
 
     /*
