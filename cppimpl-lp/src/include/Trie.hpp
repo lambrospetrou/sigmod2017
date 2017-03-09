@@ -11,7 +11,6 @@
  *
  * */
 
-
 #pragma once
 
 #include "Timer.hpp"
@@ -38,36 +37,30 @@ namespace trie {
     constexpr size_t TYPE_S_MAX = 4;
     constexpr size_t TYPE_L_MAX = 256;
     constexpr size_t TYPE_X_DEPTH = 24;
+    
+    constexpr size_t MEMORY_POOL_BLOCK_SIZE = 1<<20;
 
     size_t NumberOfGrows = 0;
     size_t NumberOfNodes = 0;
-    
-    struct Record_t {
-        size_t OpIdx;
-        OpType Type; // 0-Add, 1-Delete
 
-        Record_t() {}
-        Record_t(size_t idx, OpType t) : OpIdx(idx), Type(t) {}
-    };
-
-    // TODO Optimization
-    // TODO Maybe creating an interface for the nodes, and then each type implementing that
-    // TODO interface will be faster because you will avoid the SWITCH(TYPE) in ALL the calls.
-    // TODO On the other hand, every node jumping will be a function call on that node, so it might be slower too!!!
-
-    
+    ////////////////////////////////////////// 
+    // Forward declarations to compile!
     struct TrieNode_t;
+    struct MemoryPool_t;
+    inline static TrieNode_t* _newTrieNode(TrieNode_t*p);
+    inline static TrieNode_t* _newTrieNode(TrieNode_t*p, size_t);
+    //////////////////////////////////////////
 
-    template<size_t SIZE>
-    struct DataS {
-        static constexpr size_t INDEX_SIZE = sizeof(uint8_t) * SIZE;
+    template<size_t SIZE> 
+        struct DataS {
+            static constexpr size_t INDEX_SIZE = sizeof(uint8_t) * SIZE;
 
-        uint8_t ChildrenIndex[INDEX_SIZE + sizeof(TrieNode_t**)*SIZE];
-        TrieNode_t** Children;
-        size_t Size;
+            uint8_t ChildrenIndex[INDEX_SIZE + sizeof(TrieNode_t**)*SIZE];
+            TrieNode_t** Children;
+            size_t Size;
 
-        DataS() : Children(reinterpret_cast<TrieNode_t**>(ChildrenIndex + INDEX_SIZE)), Size(0) {}
-    };
+            DataS() : Children(reinterpret_cast<TrieNode_t**>(ChildrenIndex + INDEX_SIZE)), Size(0) {}
+        };
 
     struct DataL {
         std::vector<TrieNode_t*> Children;
@@ -79,47 +72,16 @@ namespace trie {
 
         DataS<TYPE_S_MAX> DtS;
         DataL DtL;
-        
+
         // TODO Optimization
         // TODO Create a custom String class that does not copy the contents of the char* for each key
         Map< std::string, TrieNode_t*> ChildrenMap;
-
-
-
-        TrieNode_t() : _Parent(nullptr) { init(DEFAULT_NODE_TYPE); }
-        TrieNode_t(NodeType t) : _Parent(nullptr) { init(t); }
-        TrieNode_t(TrieNode_t *p) : _Parent(p) { init(DEFAULT_NODE_TYPE); }
-        TrieNode_t(NodeType t, TrieNode_t *p) : _Parent(p) { init(t); }
-
-        inline void init(NodeType t) {
-            switch (t) {
-                case NodeType::S:
-                    Type = NodeType::S;
-                    break;
-                case NodeType::L:
-                    Type = NodeType::L;
-                    DtL.Children.reserve(TYPE_L_MAX); DtL.Children.resize(TYPE_L_MAX, nullptr);
-                    break;
-                case NodeType::X:
-                    Type = NodeType::X;
-                    break;
-            }
-        }
-
-        inline static TrieNode_t* _new(TrieNode_t*p, size_t depth = 0) {
-            NumberOfNodes++;
-            if (depth < TYPE_X_DEPTH) {
-                return new TrieNode_t(p);
-            } else {
-                return new TrieNode_t(NodeType::X, p);
-            }
-        }
 
         ///////////// Add / Remove ////////////
 
         TrieNode_t* _growTypeSWith(const uint8_t cb) {
             NumberOfGrows++;
-            
+
             Type = NodeType::L;
 
             DtL.Children.reserve(TYPE_L_MAX); DtL.Children.resize(TYPE_L_MAX, nullptr);
@@ -127,7 +89,7 @@ namespace trie {
                 DtL.Children[DtS.ChildrenIndex[i]] = DtS.Children[i];
             }
 
-            TrieNode_t *newNode = new TrieNode_t(this);
+            TrieNode_t *newNode = _newTrieNode(this);
             DtL.Children[cb] = newNode;
 
             return newNode;
@@ -135,7 +97,14 @@ namespace trie {
 
 
         ///////////// Updates related /////////////
-        
+
+        struct Record_t {
+            size_t OpIdx;
+            OpType Type; // 0-Add, 1-Delete
+
+            Record_t() {}
+            Record_t(size_t idx, OpType t) : OpIdx(idx), Type(t) {}
+        };
         std::vector<Record_t> Records; // allow parallel batched queries
 
         inline void MarkAdd(size_t opIdx) { Records.emplace_back(opIdx, OpType::ADD); }
@@ -155,6 +124,54 @@ namespace trie {
             return false;
         }
     };
+
+
+    /////////////////////////////
+
+    struct MemoryPool_t {
+        std::vector<TrieNode_t*> _m;
+        size_t allocated; // nodes given from the latest block
+
+        MemoryPool_t() : allocated(0) {
+            _m.reserve(128);
+            _m.push_back(new TrieNode_t[MEMORY_POOL_BLOCK_SIZE]);
+        }
+
+        inline TrieNode_t* _new() {
+            NumberOfNodes++;
+            //return new TrieNode_t();
+            if (allocated >= MEMORY_POOL_BLOCK_SIZE) {
+                _m.push_back(new TrieNode_t[MEMORY_POOL_BLOCK_SIZE]);
+                allocated = 0;
+            }
+            return &_m.back()[allocated++];
+        }
+    } MemoryPool;
+
+    inline static TrieNode_t* init(TrieNode_t *node, NodeType t, TrieNode_t* p) {
+        node->_Parent = p;
+        node->Type = t;
+        if (t == NodeType::L) {
+            node->DtL.Children.reserve(TYPE_L_MAX); 
+            node->DtL.Children.resize(TYPE_L_MAX, nullptr);
+        }
+        return node;
+    }
+
+    inline static TrieNode_t* _newTrieNode(TrieNode_t*p) {
+        return init(MemoryPool._new(), DEFAULT_NODE_TYPE, p);
+    }
+    inline static TrieNode_t* _newTrieNode(TrieNode_t*p, size_t depth) {
+        if (depth < TYPE_X_DEPTH) {
+            return init(MemoryPool._new(), DEFAULT_NODE_TYPE, p);
+        } else {
+            return init(MemoryPool._new(), NodeType::X, p);
+        }
+    }
+
+
+    ////////////////////////////
+
 
     // @param s The whole ngram
     static TrieNode_t* AddString(TrieNode_t *cNode, const std::string& s) {
@@ -179,7 +196,7 @@ namespace trie {
                             if (csz == TYPE_S_MAX) {
                                 cNode = cNode->_growTypeSWith(cb);
                             } else {
-                                cNode->DtS.Children[cNode->DtS.Size++] = TrieNode_t::_new(cNode, bidx);
+                                cNode->DtS.Children[cNode->DtS.Size++] = _newTrieNode(cNode, bidx);
                                 childrenIndex[csz] = cb;
                                 cNode = cNode->DtS.Children[csz];
                             }
@@ -192,7 +209,7 @@ namespace trie {
                 case NodeType::L:
                     {
                         if (!cNode->DtL.Children[cb]) {
-                            cNode->DtL.Children[cb] = TrieNode_t::_new(cNode, bidx);
+                            cNode->DtL.Children[cb] = _newTrieNode(cNode, bidx);
                         }
                         cNode = cNode->DtL.Children[cb];
                         break;
@@ -202,7 +219,7 @@ namespace trie {
                         const std::string key(s.substr(bidx));
                         auto it = cNode->ChildrenMap.find(key);
                         if (it == cNode->ChildrenMap.end()) {
-                            it = cNode->ChildrenMap.insert(it, {std::move(key), TrieNode_t::_new(cNode)});
+                            it = cNode->ChildrenMap.insert(it, {std::move(key), _newTrieNode(cNode)});
                         }
                         cNode = it->second; bidx = bsz;
                         break;
@@ -428,8 +445,8 @@ namespace trie {
         TrieNode_t *Root;
 
         TrieRoot_t() {
-            std::cerr << "S" << TYPE_S_MAX << " L" << TYPE_L_MAX << " X" << TYPE_X_DEPTH << std::endl;
-            Root = TrieNode_t::_new(nullptr, 0);
+            std::cerr << "S" << TYPE_S_MAX << " L" << TYPE_L_MAX << " X" << TYPE_X_DEPTH << " MEM_BLOCK" << MEMORY_POOL_BLOCK_SIZE << std::endl;
+            Root = _newTrieNode(nullptr, 0);
             if (Root == nullptr) { abort(); }
         }
         ~TrieRoot_t() {
@@ -438,7 +455,6 @@ namespace trie {
             _takeAnalytics(Root);
             std::cerr << "MAP::" << xTotal << "::" << xCh0 << "::" << xChMin << "::" << xChMax << "::" << (xChTotal*1.0/xTotal) << std::endl;
 
-            delete Root;
         }
     };
 
