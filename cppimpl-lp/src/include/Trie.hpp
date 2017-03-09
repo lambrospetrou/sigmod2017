@@ -40,9 +40,6 @@ namespace trie {
     
     constexpr size_t MEMORY_POOL_BLOCK_SIZE = 1<<20;
 
-    size_t NumberOfGrows = 0;
-    size_t NumberOfNodes = 0;
-
     ////////////////////////////////////////// 
     // Forward declarations to compile!
     struct TrieNode_t;
@@ -80,8 +77,6 @@ namespace trie {
         ///////////// Add / Remove ////////////
 
         TrieNode_t* _growTypeSWith(const uint8_t cb) {
-            NumberOfGrows++;
-
             Type = NodeType::L;
 
             DtL.Children.reserve(TYPE_L_MAX); DtL.Children.resize(TYPE_L_MAX, nullptr);
@@ -138,7 +133,6 @@ namespace trie {
         }
 
         inline TrieNode_t* _new() {
-            NumberOfNodes++;
             //return new TrieNode_t();
             if (allocated >= MEMORY_POOL_BLOCK_SIZE) {
                 _m.push_back(new TrieNode_t[MEMORY_POOL_BLOCK_SIZE]);
@@ -404,8 +398,11 @@ namespace trie {
     }
 
 
+    size_t NumberOfGrows = 0;
+    size_t NumberOfNodes = 0;
     size_t xChMin = 999999, xChMax = 0, xChTotal = 0, xTotal = 0, xCh0 = 0;
     static void _takeAnalytics(TrieNode_t *cNode) {
+        NumberOfNodes++;
         switch(cNode->Type) {
             case NodeType::S:
                 {
@@ -417,6 +414,8 @@ namespace trie {
                 }
             case NodeType::L:
                 {
+                    NumberOfGrows++;
+                    
                     const auto& children = cNode->DtL.Children;
                     for (size_t cidx = 0; cidx<TYPE_L_MAX; cidx++) {
                         if (children[cidx]) {
@@ -450,11 +449,9 @@ namespace trie {
             if (Root == nullptr) { abort(); }
         }
         ~TrieRoot_t() {
-            std::cerr << "upgrades::" << NumberOfGrows << " #nodes::" << NumberOfNodes << std::endl;
-
             _takeAnalytics(Root);
+            std::cerr << "upgrades::" << NumberOfGrows << " #nodes::" << NumberOfNodes << std::endl;
             std::cerr << "MAP::" << xTotal << "::" << xCh0 << "::" << xChMin << "::" << xChMax << "::" << (xChTotal*1.0/xTotal) << std::endl;
-
         }
     };
 
