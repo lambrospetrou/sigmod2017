@@ -18,9 +18,11 @@
 #include <omp.h>
 
 //#define DEBUG 1
+//#define USE_OPENMP
+//#define USE_PARALLEL
 
 size_t NUM_THREADS = 1;
-size_t DOC_SPLIT_SIZE = 6000000;
+size_t DOC_SPLIT_SIZE = 1;
 
 cy::Timer_t timer;
 
@@ -135,7 +137,7 @@ void outputResults(std::ostream& out, const std::vector<std::string>& results) {
     out << ss.str();
 }
 
-void queryEvaluationSerial(NgramDB *ngdb, const OpQuery& op) {
+void queryEvaluation(NgramDB *ngdb, const OpQuery& op) {
     const auto& doc = op.Doc;
     const size_t opIdx = op.OpIdx;
     size_t start{0}, end{0}, sz{doc.size()};
@@ -160,7 +162,7 @@ void queryEvaluationSerial(NgramDB *ngdb, const OpQuery& op) {
     outputResults(std::cout, std::move(results));
 }
 
-void queryEvaluation(NgramDB *ngdb, const OpQuery& op) {
+void queryEvaluationParallel(NgramDB *ngdb, const OpQuery& op) {
     //const auto& doc = op.Doc;
     const auto docPtr = &op.Doc;
     const size_t opIdx = op.OpIdx;
@@ -170,7 +172,8 @@ void queryEvaluation(NgramDB *ngdb, const OpQuery& op) {
     globalResults.resize(NUM_THREADS);
     size_t threads = 0;
 
-#pragma omp parallel firstprivate(docPtr, opIdx, docSz) shared(globalResults, threads) if(docSz > DOC_SPLIT_SIZE)
+//#pragma omp parallel firstprivate(docPtr, opIdx, docSz) shared(globalResults, threads) if(docSz > DOC_SPLIT_SIZE)
+#pragma omp parallel firstprivate(docPtr, opIdx, docSz) shared(globalResults, threads)
     {
         //std::cerr << "::" << omp_get_num_threads() << "-" << omp_get_thread_num() << std::endl;
 
@@ -271,7 +274,11 @@ void processWorkload(istream& in, NgramDB *ngdb, WorkersContext *wctx, int opIdx
                 break;
             case 'Q':
                 //opQs.emplace_back(ss.str(), opIdx);
+#ifdef USE_PARALLEL
+                queryEvaluationParallel(ngdb, std::move(OpQuery{line.substr(2), opIdx}));
+#else
                 queryEvaluation(ngdb, std::move(OpQuery{line.substr(2), opIdx}));
+#endif
                 tQ += timer.getChrono(startSingle);
                 break;
             case 'F':
@@ -324,14 +331,15 @@ std::unique_ptr<NgramDB> readInitial(std::istream& in, int *outOpIdx) {
 
 int main(int argc, char**argv) {
     if (argc>1) {
-        NUM_THREADS = atoi(argv[1]);
-        if (NUM_THREADS < 1) {
-            NUM_THREADS = 1;
-        }
+        NUM_THREADS = std::max(atoi(argv[1]), 1);
     }
+
+#ifdef USE_OPENMP
     omp_set_dynamic(0);
     omp_set_num_threads(NUM_THREADS);
+    
     std::cerr << "affinity::" << omp_get_proc_bind() << " threads::" << NUM_THREADS <<std::endl;
+#endif
 
 	std::ios_base::sync_with_stdio(false);
     setvbuf(stdin, NULL, _IOFBF, 1<<20);
