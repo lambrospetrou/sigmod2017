@@ -35,25 +35,30 @@ namespace trie {
         using Map = btree::btree_map<K, V>;
 
     enum class OpType : uint8_t { ADD = 0, DEL = 1 };
-    enum class NodeType : uint8_t { S = 0, L = 1, X = 2 };
-    constexpr NodeType DEFAULT_NODE_TYPE = NodeType::S;
+    enum class NodeType : uint8_t { S = 0, M = 1, L = 2, X = 3 };
 
     constexpr size_t TYPE_S_MAX = 4;
+    constexpr size_t TYPE_M_MAX = 16;
     constexpr size_t TYPE_L_MAX = 256;
     constexpr size_t TYPE_X_DEPTH = 24;
     
     constexpr size_t MEMORY_POOL_BLOCK_SIZE_S = 1<<20;
+    constexpr size_t MEMORY_POOL_BLOCK_SIZE_M = 1<<10;
     constexpr size_t MEMORY_POOL_BLOCK_SIZE_L = 1<<10;
     constexpr size_t MEMORY_POOL_BLOCK_SIZE_X = 1<<10;
 
     ////////////////////////////////////////// 
     // Forward declarations to compile!
+    struct MemoryPool_t;
+    
     struct TrieNodeL_t;
     struct TrieNodeS_t;
+    struct TrieNodeM_t;
     struct TrieNodeX_t;
-    struct MemoryPool_t;
     union NodePtr;
+    
     inline static NodePtr _newTrieNodeS(NodePtr p);
+    inline static NodePtr _newTrieNodeM(NodePtr p);
     inline static NodePtr _newTrieNodeL(NodePtr p);
     inline static NodePtr _newTrieNodeX(NodePtr p);
     inline static NodePtr _newTrieNode(NodePtr p, size_t depth = 0);
@@ -91,19 +96,19 @@ namespace trie {
 
     /////////////////////////////////////////
     union NodePtr {
-        TrieNodeL_t *L;
         TrieNodeS_t *S;
+        TrieNodeM_t *M;
+        TrieNodeL_t *L;
         TrieNodeX_t *X;
 
         NodePtr() {}
         NodePtr(std::nullptr_t t) : L(nullptr) {(void)t;}
-        NodePtr(TrieNodeL_t *l) : L(l) {}
         NodePtr(TrieNodeS_t *s) : S(s) {}
+        NodePtr(TrieNodeM_t *m) : M(m) {}
+        NodePtr(TrieNodeL_t *l) : L(l) {}
         NodePtr(TrieNodeX_t *x) : X(x) {}
 
-        inline operator bool() const {
-            return L != nullptr;
-        }
+        inline operator bool() const { return L != nullptr; }
     };
 
     template<size_t SIZE> 
@@ -124,6 +129,13 @@ namespace trie {
         RecordHistory State;
 
         DataS<TYPE_S_MAX> DtS;    
+    };
+    struct TrieNodeM_t {
+        const NodeType Type = NodeType::M;
+        NodePtr _Parent;
+        RecordHistory State;
+
+        DataS<TYPE_M_MAX> DtM;    
     };
     struct TrieNodeL_t {
         const NodeType Type = NodeType::L;
@@ -153,7 +165,7 @@ namespace trie {
             cNode->DtS.Children[cidx].S->_Parent = newNode;
             newNode->DtL.Children[cNode->DtS.ChildrenIndex[cidx]] = cNode->DtS.Children[cidx];
         }
-        auto childNode = _newTrieNodeS(newNode);
+        auto childNode = _newTrieNode(newNode);
         newNode->DtL.Children[cb] = childNode;
         switch(parent.S->Type) {
         case NodeType::S: 
@@ -162,6 +174,50 @@ namespace trie {
             for (size_t cidx=0; cidx<sp->DtS.Size; ++cidx) {
                 if (sp->DtS.ChildrenIndex[cidx] == pb) {
                     sp->DtS.Children[cidx] = newNode;
+                    break;
+                }
+            }
+            break; 
+        }
+        case NodeType::L:
+            parent.L->DtL.Children[pb] = newNode;
+            break;
+        default:
+            abort();
+        }
+        return childNode;
+    }
+    inline static NodePtr _growTypeMWith(const TrieNodeM_t *cNode, const uint8_t pb, const uint8_t cb) {
+        auto parent = cNode->_Parent;
+        auto newNode = _newTrieNodeL(cNode->_Parent).L;
+        
+        newNode->State = std::move(cNode->State);
+        for (size_t cidx=0; cidx<TYPE_M_MAX; ++cidx) {
+            cNode->DtM.Children[cidx].M->_Parent = newNode;
+            newNode->DtL.Children[cNode->DtM.ChildrenIndex[cidx]] = cNode->DtM.Children[cidx];
+        }
+        auto childNode = _newTrieNode(newNode);
+        newNode->DtL.Children[cb] = childNode;
+
+        // Update the parent
+        switch(parent.M->Type) {
+        case NodeType::S: 
+        {
+            auto sp = parent.S;
+            for (size_t cidx=0; cidx<sp->DtS.Size; ++cidx) {
+                if (sp->DtS.ChildrenIndex[cidx] == pb) {
+                    sp->DtS.Children[cidx] = newNode;
+                    break;
+                }
+            }
+            break; 
+        }
+        case NodeType::M: 
+        {
+            auto sp = parent.M;
+            for (size_t cidx=0; cidx<sp->DtM.Size; ++cidx) {
+                if (sp->DtM.ChildrenIndex[cidx] == pb) {
+                    sp->DtM.Children[cidx] = newNode;
                     break;
                 }
             }
@@ -200,6 +256,25 @@ namespace trie {
 #endif
         }
 
+        inline TrieNodeS_t* _newNodeS() {
+            //return new TrieNodeS_t();
+            if (allocatedS >= MEMORY_POOL_BLOCK_SIZE_S) {
+                _mS.push_back(new TrieNodeS_t[MEMORY_POOL_BLOCK_SIZE_S]);
+                allocatedS = 0;
+            }
+            return _mS.back() + allocatedS++;
+        }
+
+        inline TrieNodeM_t* _newNodeM() {
+            return new TrieNodeM_t();
+            /*
+            if (allocatedM >= MEMORY_POOL_BLOCK_SIZE_M) {
+                _mM.push_back(new TrieNodeM_t[MEMORY_POOL_BLOCK_SIZE_M]);
+                allocatedS = 0;
+            }
+            return _mM.back() + allocatedM++;
+            */
+        }
         
         inline TrieNodeL_t* _newNodeL() {
             //return new TrieNodeL_t();
@@ -208,15 +283,6 @@ namespace trie {
                 allocatedL = 0;
             }
             return _mL.back() + allocatedL++;
-        }
-        
-        inline TrieNodeS_t* _newNodeS() {
-            //return new TrieNode_t();
-            if (allocatedS >= MEMORY_POOL_BLOCK_SIZE_S) {
-                _mS.push_back(new TrieNodeS_t[MEMORY_POOL_BLOCK_SIZE_S]);
-                allocatedS = 0;
-            }
-            return _mS.back() + allocatedS++;
         }
         
         inline TrieNodeX_t* _newNodeX() {
@@ -232,20 +298,22 @@ namespace trie {
     inline static NodePtr _newTrieNodeS(NodePtr p) {
         TrieNodeS_t *node = MemoryPool._newNodeS();
         node->_Parent = p;
-        //node->Type = NodeType::S;
+        return node;
+    }
+    inline static NodePtr _newTrieNodeM(NodePtr p) {
+        TrieNodeM_t *node = MemoryPool._newNodeM();
+        node->_Parent = p;
         return node;
     }
     inline static NodePtr _newTrieNodeL(NodePtr p) {
         TrieNodeL_t *node = MemoryPool._newNodeL();
         node->_Parent = p;
-        //node->Type = NodeType::L;
         std::fill_n(node->DtL.Children, TYPE_L_MAX, nullptr);
         return node;
     }
     inline static NodePtr _newTrieNodeX(NodePtr p) {
         TrieNodeX_t *node = MemoryPool._newNodeX();
         node->_Parent = p;
-        //node->Type = NodeType::X;
         return node;
     }
     inline static NodePtr _newTrieNode(NodePtr p, size_t depth) {
@@ -259,8 +327,6 @@ namespace trie {
 #endif
     }
     
-
-
     ////////////////////////////
 
 
@@ -294,6 +360,31 @@ namespace trie {
                             }
                         } else {
                             cNode = sNode->DtS.Children[cidx];
+                        }
+
+                        break;
+                    }
+                case NodeType::M:
+                    {
+                        auto mNode = cNode.M;
+                        size_t cidx;
+                        auto& childrenIndex = mNode->DtM.ChildrenIndex;
+                        const size_t csz = mNode->DtM.Size;
+                        for (cidx = 0; cidx<csz; cidx++) {
+                            if (childrenIndex[cidx] == cb) {
+                                break;
+                            }
+                        }
+                        if (cidx >= csz) {
+                            if (csz == TYPE_M_MAX) {
+                                cNode = _growTypeMWith(mNode, bs[bidx-1], cb);
+                            } else {
+                                mNode->DtM.Children[mNode->DtM.Size++] = _newTrieNode(mNode, bidx);
+                                childrenIndex[csz] = cb;
+                                cNode = mNode->DtM.Children[csz];
+                            }
+                        } else {
+                            cNode = mNode->DtM.Children[cidx];
                         }
 
                         break;
@@ -351,6 +442,24 @@ namespace trie {
                         }
 
                         cNode = sNode->DtS.Children[cidx];
+                        break;    
+                    }
+                case NodeType::M:
+                    {
+                        auto mNode = cNode.M;
+                        size_t cidx;
+                        const auto& childrenIndex = mNode->DtM.ChildrenIndex;
+                        const size_t csz = mNode->DtM.Size;
+                        for (cidx = 0; cidx<csz; cidx++) {
+                            if (childrenIndex[cidx] == cb) {
+                                break;
+                            }
+                        }
+                        if (cidx >= csz) {
+                            return nullptr;
+                        }
+
+                        cNode = mNode->DtM.Children[cidx];
                         break;    
                     }
                 case NodeType::L:
@@ -464,6 +573,24 @@ namespace trie {
                         cNode = sNode->DtS.Children[cidx];
                         break;
                     }
+                case NodeType::M:
+                    {
+                        auto mNode = cNode.M;
+                        size_t cidx;
+                        const auto& childrenIndex = mNode->DtM.ChildrenIndex;
+                        const size_t csz = mNode->DtM.Size;
+                        for (cidx = 0; cidx<csz; cidx++) {
+                            if (childrenIndex[cidx] == cb) {
+                                break;
+                            }
+                        }
+                        if (cidx >= csz) {
+                            return std::move(results);
+                        }
+
+                        cNode = mNode->DtM.Children[cidx];
+                        break;
+                    }
                 case NodeType::L:
                     {
                         if (!cNode.L->DtL.Children[cb]) {
@@ -510,6 +637,15 @@ namespace trie {
                     const size_t csz = sNode->DtS.Size;
                     for (size_t cidx = 0; cidx<csz; cidx++) {
                         _takeAnalytics(sNode->DtS.Children[cidx]);
+                    }
+                    break;
+                }
+            case NodeType::M:
+                {
+                    auto mNode = cNode.M;
+                    const size_t csz = mNode->DtM.Size;
+                    for (size_t cidx = 0; cidx<csz; cidx++) {
+                        _takeAnalytics(mNode->DtM.Children[cidx]);
                     }
                     break;
                 }
