@@ -21,9 +21,6 @@
 //#define USE_OPENMP
 //#define USE_PARALLEL
 
-size_t NUM_THREADS;
-size_t DOC_SPLIT_SIZE = 1;
-
 cy::Timer_t timer;
 
 template<typename K, typename V> using Map = btree::btree_map<K, V>;
@@ -103,10 +100,9 @@ struct NgramDB {
 };
 
 struct WorkersContext {
-    size_t ParallelQ;
-	size_t MaxDocSplit;
+    size_t NumThreads;
 
-    WorkersContext() : ParallelQ(1), MaxDocSplit(-1) {}
+    WorkersContext() : NumThreads(1) {}
 };
 
 //////////////////////////////////////
@@ -162,17 +158,16 @@ void queryEvaluation(NgramDB *ngdb, const OpQuery& op) {
     outputResults(std::cout, std::move(results));
 }
 
-void queryEvaluationParallel(NgramDB *ngdb, const OpQuery& op) {
+void queryEvaluationParallel(NgramDB *ngdb, WorkersContext *wctx, const OpQuery& op) {
     //const auto& doc = op.Doc;
     const auto docPtr = &op.Doc;
     const size_t opIdx = op.OpIdx;
     const size_t docSz{docPtr->size()};
 
     std::vector< std::vector<std::string>> globalResults;
-    globalResults.resize(NUM_THREADS);
+    globalResults.resize(wctx->NumThreads);
     size_t threads = 0;
 
-//#pragma omp parallel firstprivate(docPtr, opIdx, docSz) shared(globalResults, threads) if(docSz > DOC_SPLIT_SIZE)
 #pragma omp parallel firstprivate(docPtr, opIdx, docSz) shared(globalResults, threads)
     {
         //std::cerr << "::" << omp_get_num_threads() << "-" << omp_get_thread_num() << std::endl;
@@ -184,23 +179,14 @@ void queryEvaluationParallel(NgramDB *ngdb, const OpQuery& op) {
         size_t pidx = omp_get_thread_num();
 
         #pragma omp single 
-        {
-            threads = nthreads;
-        }
-
-        size_t batchSz = docSz/nthreads;
-        //size_t extra = docSz%nthreads; // for now the last thread takes the extra
-
-        size_t start = pidx * batchSz;
-        size_t startIdxEnd = std::min((pidx+1) * batchSz, docSz); // we should not examine a word *starting* after this point
+        { threads = nthreads; }
+        
+        size_t start = pidx * docSz / nthreads;
+        size_t startIdxEnd = (pidx+1) * docSz / nthreads; // we should not examine a word *starting* after this point
         if (pidx > 0 && doc[start-1] != ' ') {
             for (; start<docSz && doc[start] != ' '; ++start) {} // skip split words
         }
-
         size_t end = start; // used to move the start forward in each iteration
-        if (pidx == nthreads-1) {
-            startIdxEnd = docSz;
-        }
         
         for (; start < docSz; ) {
             // find start of word
@@ -262,7 +248,7 @@ void processWorkload(istream& in, NgramDB *ngdb, WorkersContext *wctx, int opIdx
             case 'Q':
                 //opQs.emplace_back(ss.str(), opIdx);
 #ifdef USE_PARALLEL
-                queryEvaluationParallel(ngdb, std::move(OpQuery{line.substr(2), opIdx}));
+                queryEvaluationParallel(ngdb, wctx, std::move(OpQuery{line.substr(2), opIdx}));
 #else
                 queryEvaluation(ngdb, std::move(OpQuery{line.substr(2), opIdx}));
 #endif
@@ -317,15 +303,16 @@ std::unique_ptr<NgramDB> readInitial(std::istream& in, int *outOpIdx) {
 }
 
 int main(int argc, char**argv) {
+    size_t threads = 1;
     if (argc>1) {
-        NUM_THREADS = std::max(atoi(argv[1]), 1);
+        threads = std::max(atoi(argv[1]), 1);
     }
 
 #ifdef USE_OPENMP
     omp_set_dynamic(0);
-    omp_set_num_threads(NUM_THREADS);
+    omp_set_num_threads(threads);
     
-    std::cerr << "affinity::" << omp_get_proc_bind() << " threads::" << NUM_THREADS <<std::endl;
+    std::cerr << "affinity::" << omp_get_proc_bind() << " threads::" << threads <<std::endl;
 #endif
 
 	std::ios_base::sync_with_stdio(false);
@@ -337,6 +324,7 @@ int main(int argc, char**argv) {
     std::unique_ptr<NgramDB> ngdb = readInitial(std::cin, &opIdx);
 
     WorkersContext wctx;
+    wctx.NumThreads = threads;
     processWorkload(std::cin, ngdb.get(), &wctx, opIdx);
 	
     std::cerr << "main::" << timer.getChrono(start) << std::endl;
