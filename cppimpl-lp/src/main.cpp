@@ -161,65 +161,71 @@ void queryEvaluation(NgramDB *ngdb, const OpQuery& op) {
     outputResults(std::cout, std::move(queryEvaluationWithResults(ngdb, op)));
 }
 
-void queryEvaluationParallel(NgramDB *ngdb, WorkersContext *wctx, const OpQuery& op) {
-    //const auto& doc = op.Doc;
-    const auto docPtr = &op.Doc;
-    const size_t opIdx = op.OpIdx;
-    const size_t docSz{docPtr->size()};
+uint64_t printingTime = 0;
+void queryBatchEvaluation(NgramDB *ngdb, WorkersContext *wctx, const std::vector<OpQuery> *opQs) { 
+    if (opQs->empty()) { return; }
 
-    std::vector< std::vector<std::string>> globalResults;
-    globalResults.resize(wctx->NumThreads);
-    size_t threads = 0;
-
-#pragma omp parallel firstprivate(docPtr, opIdx, docSz) shared(globalResults, threads)
-    {
-        //std::cerr << "::" << omp_get_num_threads() << "-" << omp_get_thread_num() << std::endl;
-
-        const std::string& doc = *docPtr;
-        std::vector<std::string> results;
-        
-        size_t nthreads = omp_get_num_threads();
-        size_t pidx = omp_get_thread_num();
-
-        #pragma omp single 
-        { threads = nthreads; }
-        
-        size_t start = pidx * docSz / nthreads;
-        size_t startIdxEnd = (pidx+1) * docSz / nthreads; // we should not examine a word *starting* after this point
-        if (pidx > 0 && doc[start-1] != ' ') {
-            for (; start<docSz && doc[start] != ' '; ++start) {} // skip split words
+    auto singleExecute = [&]() {
+        const size_t qsz = opQs->size();
+        for (size_t qidx=0; qidx<qsz; ++qidx) {
+            queryEvaluation(ngdb, (*opQs)[qidx]);
         }
-        size_t end = start; // used to move the start forward in each iteration
-        
-        for (; start < docSz; ) {
-            // find start of word
-            for (start = end; start < startIdxEnd && doc[start] == ' '; ++start) {}
-            if (start >= startIdxEnd) { break; }
+    };
 
-            std::vector<std::string> cresult = ngdb->FindNgrams(doc, start, opIdx);
-            if (!cresult.empty()) {
-                results.insert(results.end(), cresult.begin(), cresult.end());
-            }
-            
-            for (end = start; end < docSz && doc[end] != ' '; ++end) {}
-        }
-
-        globalResults[pidx] = std::move(results);
-    }
+#ifndef USE_PARALLEL
+    return singleExecute();
+#else
+    ////////////////// PARALLEL SECTION /////////////////
+    const size_t qsz = opQs->size(); std::cerr << qsz << "_";
     
-    std::vector<std::string> results(std::move(globalResults[0]));
-    for (size_t pidx=1; pidx<threads; ++pidx) {
-        results.insert(results.end(), globalResults[pidx].begin(), globalResults[pidx].end());
+    if (qsz < 20) {
+        return singleExecute();
     }
-    outputResults(std::cout, std::move(results));
-}
 
-void queryBatchEvaluation(NgramDB *ngdb, WorkersContext *wctx, const std::vector<OpQuery> &opQ) {
-    const size_t qsz = opQ.size();
-//#pragma omp parallel for shared(ngdb, wctx, opQ) firstprivate(qsz)
-    for (size_t qidx=0; qidx<qsz; ++qidx) {
-        queryEvaluation(ngdb, opQ[qidx]);
+    std::vector<std::vector<std::vector<std::string>>> gResults; 
+    gResults.resize(wctx->NumThreads);
+    
+    size_t actualThreads;
+
+#pragma omp parallel shared(ngdb, wctx, opQs, gResults, actualThreads)
+    {
+        const size_t nthreads = omp_get_num_threads();
+        const size_t pidx = omp_get_thread_num();
+
+        #pragma omp single
+        { actualThreads = nthreads; }
+        //const size_t start = pidx * qsz / nthreads;
+        //const size_t end = (pidx+1) * qsz / nthreads;
+        
+        //#pragma omp critical
+        //std::cerr << pidx << "::" << start << "-" << end << "::" << qsz << std::endl;
+
+        std::vector<std::vector<std::string>> results; 
+        results.reserve(qsz/nthreads);
+
+        for (size_t qidx=pidx; qidx<qsz; qidx += nthreads) {
+            results.push_back(std::move(queryEvaluationWithResults(ngdb, (*opQs)[qidx])));
+        }
+
+        gResults[pidx] = std::move(results);
     }
+
+    auto startPrint = timer.getChrono();
+
+    size_t round = 0, allRounds = (opQs->size()/actualThreads) + (opQs->size()%actualThreads > 0);
+    for (;;) {
+        for (size_t pidx=0; pidx<actualThreads; pidx++) {
+            const auto& results = gResults[pidx];
+            if (round < results.size()) {
+                outputResults(std::cout, std::move(results[round]));
+            }
+        }
+        if (round++ >= allRounds) { break; }
+    }
+
+    printingTime += timer.getChrono(startPrint);
+
+#endif
 }
 
 void processWorkload(istream& in, NgramDB *ngdb, WorkersContext *wctx, int opIdx) {
@@ -256,14 +262,8 @@ void processWorkload(istream& in, NgramDB *ngdb, WorkersContext *wctx, int opIdx
                 tA += timer.getChrono(startSingle);
                 break;
             case 'Q':
-                opQs.emplace_back(line.substr(2), opIdx);
-                /*
-#ifdef USE_PARALLEL
-                queryEvaluationParallel(ngdb, wctx, std::move(OpQuery{line.substr(2), opIdx}));
-#else
+                //opQs.emplace_back(line.substr(2), opIdx);
                 queryEvaluation(ngdb, std::move(OpQuery{line.substr(2), opIdx}));
-#endif
-                */
                 tQ += timer.getChrono(startSingle);
                 break;
             case 'F':
@@ -275,16 +275,16 @@ void processWorkload(istream& in, NgramDB *ngdb, WorkersContext *wctx, int opIdx
                     opUs.resize(0);
                 }
                 */
-                
-                queryBatchEvaluation(ngdb, wctx, opQs);
+                /*      
+                queryBatchEvaluation(ngdb, wctx, &opQs);
                 opQs.resize(0);
-                
                 tQ += timer.getChrono(startSingle);
+                */
                 break;
         }
 	}
 
-	std::cerr << "proc::" << timer.getChrono(start) << ":" << tA << ":" << tD << ":" << tQ << std::endl;
+	std::cerr << "proc::" << timer.getChrono(start) << ":" << tA << ":" << tD << ":" << tQ << ":" << printingTime << std::endl;
 }
 
 std::unique_ptr<NgramDB> readInitial(std::istream& in, int *outOpIdx) {
