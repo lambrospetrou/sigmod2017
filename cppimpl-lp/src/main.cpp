@@ -1,4 +1,5 @@
 #include "include/Timer.hpp"
+#include "include/CYUtils.hpp"
 #include "include/Trie.hpp"
 
 #include "include/cpp_btree/btree_map.h"
@@ -18,7 +19,6 @@
 #include <omp.h>
 
 
-//#define DEBUG 1
 //#define USE_OPENMP
 //#define USE_PARALLEL
 

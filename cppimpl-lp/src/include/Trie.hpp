@@ -26,6 +26,8 @@
 #include <map>
 #include <cstring>
 
+#include <emmintrin.h>
+
 //#define USE_TYPE_X
 
 namespace cy {
@@ -37,7 +39,7 @@ namespace trie {
     enum class OpType : uint8_t { ADD = 0, DEL = 1 };
     enum class NodeType : uint8_t { S = 0, M = 1, L = 2, X = 3 };
 
-    constexpr size_t TYPE_S_MAX = 4;
+    constexpr size_t TYPE_S_MAX = 2;
     constexpr size_t TYPE_M_MAX = 16;
     constexpr size_t TYPE_L_MAX = 256;
     constexpr size_t TYPE_X_DEPTH = 24;
@@ -113,13 +115,11 @@ namespace trie {
 
     template<size_t SIZE> 
         struct DataS {
-            static constexpr size_t INDEX_SIZE = sizeof(uint8_t) * SIZE;
-
-            uint8_t ChildrenIndex[INDEX_SIZE + sizeof(NodePtr*)*SIZE];
+            uint8_t ChildrenIndex[sizeof(uint8_t) * SIZE + sizeof(NodePtr*)*SIZE];
             NodePtr* Children;
             size_t Size;
 
-            DataS() : Children(reinterpret_cast<NodePtr*>(ChildrenIndex + INDEX_SIZE)), Size(0) {}
+            DataS() : Children(reinterpret_cast<NodePtr*>(ChildrenIndex + sizeof(uint8_t) * SIZE)), Size(0) {}
         };
 
 
@@ -132,14 +132,16 @@ namespace trie {
         RecordHistory State;
 
         DataS<TYPE_S_MAX> DtS;    
-    } ALIGNED_DATA;
+    };
     struct TrieNodeM_t {
         const NodeType Type = NodeType::M;
         NodePtr _Parent;
         RecordHistory State;
+        // 40 bytes so far. To be 16-bit aligned for SIMD we need to pad some bytes
+        uint8_t padding[8];
 
-        DataS<TYPE_M_MAX> DtM;    
-    } ALIGNED_DATA;
+        DataS<TYPE_M_MAX> DtM;
+    } ALIGNED_16;
     struct TrieNodeL_t {
         const NodeType Type = NodeType::L;
         NodePtr _Parent;
@@ -148,7 +150,7 @@ namespace trie {
         struct DataL {
             NodePtr Children[256];
         } DtL;
-    } ALIGNED_DATA;
+    };
     struct TrieNodeX_t {
         const NodeType Type = NodeType::X;
         NodePtr _Parent;
@@ -157,7 +159,7 @@ namespace trie {
         // TODO Optimization
         // TODO Create a custom String class that does not copy the contents of the char* for each key
         Map<std::string, NodePtr> ChildrenMap;
-    } ALIGNED_DATA;
+    };
 
     inline static NodePtr _growTypeSWith(const TrieNodeS_t *cNode, const uint8_t pb, const uint8_t cb) {
         auto parent = cNode->_Parent;
@@ -166,8 +168,6 @@ namespace trie {
         newNode->State = std::move(cNode->State);
         newNode->DtM.Size = TYPE_S_MAX+1;
 
-        //std::memcpy(newNode->DtM.ChildrenIndex, cNode->DtS.ChildrenIndex, TYPE_S_MAX * sizeof(uint8_t));
-        //std::memcpy(newNode->DtM.Children, cNode->DtS.Children, TYPE_S_MAX * sizeof(NodePtr*));        
         for (size_t cidx=0; cidx<TYPE_S_MAX; ++cidx) {
             newNode->DtM.Children[cidx] = cNode->DtS.Children[cidx];
             newNode->DtM.Children[cidx].S->_Parent = newNode;
@@ -392,24 +392,39 @@ namespace trie {
                 case NodeType::M:
                     {
                         auto mNode = cNode.M;
-                        size_t cidx;
-                        auto& childrenIndex = mNode->DtM.ChildrenIndex;
                         const size_t csz = mNode->DtM.Size;
-                        for (cidx = 0; cidx<csz; cidx++) {
-                            if (childrenIndex[cidx] == cb) {
+                        
+                        auto key =_mm_set1_epi8(cb);
+                        auto cmp =_mm_cmpeq_epi8(key, *(__m128i*)mNode->DtM.ChildrenIndex);
+                        auto mask=(1<<csz)-1;
+                        auto bitfield=_mm_movemask_epi8(cmp)&mask;
+                         
+#ifdef DEBUG
+                        auto& childrenIndex = mNode->DtM.ChildrenIndex;
+                        size_t tcidx = 0;
+                        for (tcidx = 0; tcidx<csz; tcidx++) {
+                            if (childrenIndex[tcidx] == cb) {
                                 break;
                             }
                         }
-                        if (cidx >= csz) {
+                        if (tcidx>=csz && bitfield > 0) {
+                            std::cerr << (void*)mNode << ":" << is_aligned(mNode, 16) << std::endl;
+                            std::cerr << (void*)mNode->DtM.ChildrenIndex << ":" << is_aligned(mNode->DtM.ChildrenIndex, 16) << std::endl;
+                            std::cerr << mask << "::" << bitfield << "::" << csz << "::"<< "::" << tcidx << std::endl;
+                            abort();
+                        }
+#endif
+
+                        if (!bitfield) {
                             if (csz == TYPE_M_MAX) {
                                 cNode = _growTypeMWith(mNode, bs[bidx-1], cb);
                             } else {
                                 mNode->DtM.Children[mNode->DtM.Size++] = _newTrieNode(mNode, bidx);
-                                childrenIndex[csz] = cb;
+                                mNode->DtM.ChildrenIndex[csz] = cb;
                                 cNode = mNode->DtM.Children[csz];
                             }
                         } else {
-                            cNode = mNode->DtM.Children[cidx];
+                            cNode = mNode->DtM.Children[__builtin_ctz(bitfield)];
                         }
 
                         break;
@@ -472,19 +487,36 @@ namespace trie {
                 case NodeType::M:
                     {
                         auto mNode = cNode.M;
-                        size_t cidx;
-                        const auto& childrenIndex = mNode->DtM.ChildrenIndex;
                         const size_t csz = mNode->DtM.Size;
+
+                        auto key =_mm_set1_epi8(cb);
+                        auto cmp =_mm_cmpeq_epi8(key, *(__m128i*)mNode->DtM.ChildrenIndex);
+                        auto mask=(1<<csz)-1;
+                        auto bitfield=_mm_movemask_epi8(cmp)&mask;
+                        
+                        if (!bitfield) {
+                            return nullptr;
+                        }
+                        
+#ifdef DEBUG
+                        auto& childrenIndex = mNode->DtM.ChildrenIndex;
+                        size_t cidx = 0;
                         for (cidx = 0; cidx<csz; cidx++) {
                             if (childrenIndex[cidx] == cb) {
                                 break;
                             }
                         }
-                        if (cidx >= csz) {
-                            return nullptr;
+                      
+                        if (cidx < csz && bitfield <= 0) {
+                            std::cerr << (void*)mNode << ":" << is_aligned(mNode, 16) << std::endl;
+                            std::cerr << (void*)mNode->DtM.ChildrenIndex << ":" << is_aligned(mNode->DtM.ChildrenIndex, 16) << std::endl;
+                            
+                            std::cerr << mask << "::" << bitfield << "::" << csz << "::" << cidx << std::endl;
+                            abort();
                         }
+#endif
 
-                        cNode = mNode->DtM.Children[cidx];
+                        cNode = mNode->DtM.Children[__builtin_ctz(bitfield)];
                         break;    
                     }
                 case NodeType::L:
@@ -601,19 +633,16 @@ namespace trie {
                 case NodeType::M:
                     {
                         auto mNode = cNode.M;
-                        size_t cidx;
-                        const auto& childrenIndex = mNode->DtM.ChildrenIndex;
                         const size_t csz = mNode->DtM.Size;
-                        for (cidx = 0; cidx<csz; cidx++) {
-                            if (childrenIndex[cidx] == cb) {
-                                break;
-                            }
-                        }
-                        if (cidx >= csz) {
+                        
+                        auto key =_mm_set1_epi8(cb);
+                        auto cmp =_mm_cmpeq_epi8(key, *(__m128i*)mNode->DtM.ChildrenIndex);
+                        auto mask=(1<<csz)-1;
+                        auto bitfield=_mm_movemask_epi8(cmp)&mask;
+                        if (!bitfield) {
                             return std::move(results);
                         }
-
-                        cNode = mNode->DtM.Children[cidx];
+                        cNode = mNode->DtM.Children[__builtin_ctz(bitfield)];
                         break;
                     }
                 case NodeType::L:
@@ -706,7 +735,7 @@ namespace trie {
         NodePtr Root;
 
         TrieRoot_t() {
-            std::cerr << sizeof(TrieNodeS_t) << "::" << sizeof(TrieNodeM_t) <<  "::" << sizeof(TrieNodeL_t) <<  "::" << sizeof(TrieNodeX_t) << std::endl;
+            std::cerr << sizeof(TrieNodeS_t) << "::" << sizeof(TrieNodeM_t) <<  "::" << sizeof(TrieNodeL_t) <<  "::" << sizeof(TrieNodeX_t) << "::" << sizeof(RecordHistory) << "::" << sizeof(NodePtr) << std::endl;
             
             std::cerr << "S" << TYPE_S_MAX << " L" << TYPE_L_MAX << " X" << TYPE_X_DEPTH;
             std::cerr << " MEM_S" << MEMORY_POOL_BLOCK_SIZE_S;

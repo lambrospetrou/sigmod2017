@@ -12,12 +12,15 @@
 //#include "agner/vectorclass.h"
 //#include "aligned_allocator.hpp"
 
+//#define DEBUG
 
 #define CACHE_LINE_SIZE 64
 #define CACHE_ALIGNMENT 64
 
+#define ALIGNED_16 __attribute__((aligned(16)))
 #define ALIGNED_DATA __attribute__((aligned(CACHE_ALIGNMENT)))
 //#define ALIGNED_DATA
+#define is_aligned(POINTER, BYTE_COUNT) (((uintptr_t)(const void *)(POINTER)) % (BYTE_COUNT) == 0)
 
 
 namespace lp {
