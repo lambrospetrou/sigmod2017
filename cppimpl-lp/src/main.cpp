@@ -133,7 +133,7 @@ void outputResults(std::ostream& out, const std::vector<std::string>& results) {
     out << ss.str();
 }
 
-void queryEvaluation(NgramDB *ngdb, const OpQuery& op) {
+std::vector<std::string> queryEvaluationWithResults(NgramDB *ngdb, const OpQuery& op) {
     const auto& doc = op.Doc;
     const size_t opIdx = op.OpIdx;
     size_t start{0}, end{0}, sz{doc.size()};
@@ -155,7 +155,10 @@ void queryEvaluation(NgramDB *ngdb, const OpQuery& op) {
         for (end = start; end < sz && doc[end] != ' '; ++end) {}
     }
 
-    outputResults(std::cout, std::move(results));
+    return std::move(results);
+}
+void queryEvaluation(NgramDB *ngdb, const OpQuery& op) {
+    outputResults(std::cout, std::move(queryEvaluationWithResults(ngdb, op)));
 }
 
 void queryEvaluationParallel(NgramDB *ngdb, WorkersContext *wctx, const OpQuery& op) {
@@ -211,6 +214,13 @@ void queryEvaluationParallel(NgramDB *ngdb, WorkersContext *wctx, const OpQuery&
     outputResults(std::cout, std::move(results));
 }
 
+void queryBatchEvaluation(NgramDB *ngdb, WorkersContext *wctx, const std::vector<OpQuery> &opQ) {
+    const size_t qsz = opQ.size();
+//#pragma omp parallel for shared(ngdb, wctx, opQ) firstprivate(qsz)
+    for (size_t qidx=0; qidx<qsz; ++qidx) {
+        queryEvaluation(ngdb, opQ[qidx]);
+    }
+}
 
 void processWorkload(istream& in, NgramDB *ngdb, WorkersContext *wctx, int opIdx) {
     auto start = timer.getChrono();
@@ -246,26 +256,30 @@ void processWorkload(istream& in, NgramDB *ngdb, WorkersContext *wctx, int opIdx
                 tA += timer.getChrono(startSingle);
                 break;
             case 'Q':
-                //opQs.emplace_back(ss.str(), opIdx);
+                opQs.emplace_back(line.substr(2), opIdx);
+                /*
 #ifdef USE_PARALLEL
                 queryEvaluationParallel(ngdb, wctx, std::move(OpQuery{line.substr(2), opIdx}));
 #else
                 queryEvaluation(ngdb, std::move(OpQuery{line.substr(2), opIdx}));
 #endif
+                */
                 tQ += timer.getChrono(startSingle);
                 break;
             case 'F':
-                /*
-                std::cerr << opQs.size() << ":" << opUs.size() << std::endl;
+                //std::cerr << opQs.size() << ":" << opUs.size() << std::endl;
     
+                /*
                 if (!opQs.empty()) {
                     updatesBatchDispatcher(ngdb, wctx, opUs);
                     opUs.resize(0);
                 }
-
-                queryBatchDispatcher(ngdb, wctx, opQs);
-                opQs.resize(0);
                 */
+                
+                queryBatchEvaluation(ngdb, wctx, opQs);
+                opQs.resize(0);
+                
+                tQ += timer.getChrono(startSingle);
                 break;
         }
 	}
