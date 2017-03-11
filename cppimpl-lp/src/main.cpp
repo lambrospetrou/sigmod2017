@@ -17,6 +17,7 @@
 
 #include <omp.h>
 
+
 //#define DEBUG 1
 //#define USE_OPENMP
 //#define USE_PARALLEL

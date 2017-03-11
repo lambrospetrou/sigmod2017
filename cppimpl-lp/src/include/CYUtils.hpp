@@ -12,6 +12,14 @@
 //#include "agner/vectorclass.h"
 //#include "aligned_allocator.hpp"
 
+
+#define CACHE_LINE_SIZE 64
+#define CACHE_ALIGNMENT 64
+
+#define ALIGNED_DATA __attribute__((aligned(CACHE_ALIGNMENT)))
+//#define ALIGNED_DATA
+
+
 namespace lp {
 
 #define likely(x)       __builtin_expect(!!(x), 1)

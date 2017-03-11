@@ -9,7 +9,7 @@ COMPILE_CMD=g++ -g -L./include/asm  $(RELEASE_CFLAGS) -o$@ main.cpp -fopenmp -lp
 all: main
 
 # just compile always anyway ;)
-main: include/Trie.hpp main.cpp;
+main: include/Trie.hpp include/CYUtils.hpp main.cpp;
 	${COMPILE_CMD}
 
 clean:

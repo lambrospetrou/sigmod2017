@@ -123,20 +123,23 @@ namespace trie {
         };
 
 
+    // Aligned    : 128::256::2112::64
+    // Non-Aligned: 96::200::2088::48
+
     struct TrieNodeS_t {
         const NodeType Type = NodeType::S;
         NodePtr _Parent; // TODO check if removing the parent has any effect. We can use the previous iteration cNode to determine it
         RecordHistory State;
 
         DataS<TYPE_S_MAX> DtS;    
-    };
+    } ALIGNED_DATA;
     struct TrieNodeM_t {
         const NodeType Type = NodeType::M;
         NodePtr _Parent;
         RecordHistory State;
 
         DataS<TYPE_M_MAX> DtM;    
-    };
+    } ALIGNED_DATA;
     struct TrieNodeL_t {
         const NodeType Type = NodeType::L;
         NodePtr _Parent;
@@ -145,7 +148,7 @@ namespace trie {
         struct DataL {
             NodePtr Children[256];
         } DtL;
-    };
+    } ALIGNED_DATA;
     struct TrieNodeX_t {
         const NodeType Type = NodeType::X;
         NodePtr _Parent;
@@ -154,7 +157,7 @@ namespace trie {
         // TODO Optimization
         // TODO Create a custom String class that does not copy the contents of the char* for each key
         Map<std::string, NodePtr> ChildrenMap;
-    };
+    } ALIGNED_DATA;
 
     inline static NodePtr _growTypeSWith(const TrieNodeS_t *cNode, const uint8_t pb, const uint8_t cb) {
         auto parent = cNode->_Parent;
@@ -330,7 +333,7 @@ namespace trie {
     inline static NodePtr _newTrieNodeL(NodePtr p) {
         TrieNodeL_t *node = MemoryPool._newNodeL();
         node->_Parent = p;
-        std::fill_n(node->DtL.Children, TYPE_L_MAX, nullptr);
+        std::memset(node->DtL.Children, 0, TYPE_L_MAX * sizeof(NodePtr*));
         return node;
     }
     inline static NodePtr _newTrieNodeX(NodePtr p) {
@@ -703,6 +706,8 @@ namespace trie {
         NodePtr Root;
 
         TrieRoot_t() {
+            std::cerr << sizeof(TrieNodeS_t) << "::" << sizeof(TrieNodeM_t) <<  "::" << sizeof(TrieNodeL_t) <<  "::" << sizeof(TrieNodeX_t) << std::endl;
+            
             std::cerr << "S" << TYPE_S_MAX << " L" << TYPE_L_MAX << " X" << TYPE_X_DEPTH;
             std::cerr << " MEM_S" << MEMORY_POOL_BLOCK_SIZE_S;
             std::cerr << " MEM_M" << MEMORY_POOL_BLOCK_SIZE_M;
