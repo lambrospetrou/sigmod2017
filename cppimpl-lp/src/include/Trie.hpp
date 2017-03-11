@@ -26,6 +26,12 @@
 #include <map>
 #include <cstring>
 
+////////////////////////////
+// CHECKPOINT TYPE L WORKING
+///////////////////////////
+
+
+
 namespace cy {
 namespace trie {
 
@@ -38,63 +44,26 @@ namespace trie {
 
     constexpr size_t TYPE_S_MAX = 4;
     constexpr size_t TYPE_L_MAX = 256;
-    constexpr size_t TYPE_X_DEPTH = 24;
+    constexpr size_t TYPE_X_DEPTH = 240000;
     
     constexpr size_t MEMORY_POOL_BLOCK_SIZE = 1<<20;
+    constexpr size_t MEMORY_POOL_BLOCK_SIZE_L = 1<<10;
 
     ////////////////////////////////////////// 
     // Forward declarations to compile!
     struct TrieNode_t;
+    struct TrieNodeL_t;
+    struct TrieNodeS_t;
     struct MemoryPool_t;
-    inline static TrieNode_t* _newTrieNode(TrieNode_t*p);
-    inline static TrieNode_t* _newTrieNode(TrieNode_t*p, size_t);
+    union NodeChild;
+    inline static TrieNode_t* _newTrieNode(TrieNode_t*p, size_t=0);
+    inline static NodeChild _newTrieNodeS(NodeChild p, size_t depth);
+    inline static NodeChild _newTrieNodeL(NodeChild p, size_t depth);
     //////////////////////////////////////////
 
-    template<size_t SIZE> 
-        struct DataS {
-            static constexpr size_t INDEX_SIZE = sizeof(uint8_t) * SIZE;
+    /////////////////////////////////////////
 
-            uint8_t ChildrenIndex[INDEX_SIZE + sizeof(TrieNode_t**)*SIZE];
-            TrieNode_t** Children;
-            size_t Size;
-
-            DataS() : Children(reinterpret_cast<TrieNode_t**>(ChildrenIndex + INDEX_SIZE)), Size(0) {}
-        };
-
-    struct DataL {
-        std::vector<TrieNode_t*> Children;
-    };
-
-    struct TrieNode_t {
-        NodeType Type;
-        TrieNode_t *_Parent;
-
-        DataS<TYPE_S_MAX> DtS;
-        DataL DtL;
-
-        // TODO Optimization
-        // TODO Create a custom String class that does not copy the contents of the char* for each key
-        Map< std::string, TrieNode_t*> ChildrenMap;
-
-        ///////////// Add / Remove ////////////
-
-        TrieNode_t* _growTypeSWith(const uint8_t cb) {
-            Type = NodeType::L;
-
-            DtL.Children.reserve(TYPE_L_MAX); DtL.Children.resize(TYPE_L_MAX, nullptr);
-            for (size_t i=0, sz=TYPE_S_MAX; i<sz; i++) {
-                DtL.Children[DtS.ChildrenIndex[i]] = DtS.Children[i];
-            }
-
-            TrieNode_t *newNode = _newTrieNode(this);
-            DtL.Children[cb] = newNode;
-
-            return newNode;
-        }
-
-
-        ///////////// Updates related /////////////
-
+    struct RecordHistory {
         struct Record_t {
             size_t OpIdx;
             OpType Type; // 0-Add, 1-Delete
@@ -122,67 +91,191 @@ namespace trie {
         }
     };
 
+    /////////////////////////////////////////
+    union NodeChild {
+        TrieNodeL_t *L;
+        TrieNodeS_t *S;
+        TrieNode_t *X;
+
+        NodeChild() {}
+        NodeChild(std::nullptr_t t) : L(nullptr) {(void)t;}
+        NodeChild(TrieNodeL_t *l) : L(l) {}
+        NodeChild(TrieNodeS_t *s) : S(s) {}
+        NodeChild(TrieNode_t *p) : X(p) {}
+
+        inline operator bool() const {
+            return L != nullptr;
+        }
+    };
+
+    template<size_t SIZE> 
+        struct DataS {
+            static constexpr size_t INDEX_SIZE = sizeof(uint8_t) * SIZE;
+
+            uint8_t ChildrenIndex[INDEX_SIZE + sizeof(NodeChild*)*SIZE];
+            NodeChild* Children;
+            size_t Size;
+
+            DataS() : Children(reinterpret_cast<NodeChild*>(ChildrenIndex + INDEX_SIZE)), Size(0) {}
+        };
+
+
+    struct TrieNodeS_t {
+        NodeType Type;
+        NodeChild _Parent; // TODO check if removing the parent has any effect. We can use the previous iteration cNode to determine it
+        RecordHistory State;
+
+        DataS<TYPE_S_MAX> DtS;    
+    };
+    struct TrieNodeL_t {
+        NodeType Type;
+        NodeChild _Parent;
+        RecordHistory State;
+
+        struct DataL {
+            NodeChild Children[256];
+        } DtL;
+    };
+
+    struct TrieNode_t {
+        NodeType Type;
+        TrieNode_t *_Parent;
+
+        RecordHistory State; 
+        
+        // TODO Optimization
+        // TODO Create a custom String class that does not copy the contents of the char* for each key
+        Map< std::string, TrieNode_t*> ChildrenMap;
+    };
+
+    inline static NodeChild _growTypeSWith(const TrieNodeS_t *cNode, const uint8_t pb, const uint8_t cb) {
+        auto parent = cNode->_Parent;
+        auto newNode = _newTrieNodeL(cNode->_Parent, 0).L;
+        
+        newNode->State = cNode->State;
+        for (size_t cidx=0; cidx<TYPE_S_MAX; ++cidx) {
+            cNode->DtS.Children[cidx].S->_Parent = newNode;
+            newNode->DtL.Children[cNode->DtS.ChildrenIndex[cidx]] = cNode->DtS.Children[cidx];
+        }
+        auto childNode = _newTrieNodeS(newNode, 0);
+        newNode->DtL.Children[cb] = childNode;
+        switch(parent.S->Type) {
+        case NodeType::S: 
+        {
+            auto sp = parent.S;
+            for (size_t cidx=0; cidx<sp->DtS.Size; ++cidx) {
+                if (sp->DtS.ChildrenIndex[cidx] == pb) {
+                    sp->DtS.Children[cidx] = newNode;
+                    break;
+                }
+            }
+            break; 
+        }
+        case NodeType::L:
+            parent.L->DtL.Children[pb] = newNode;
+            break;
+        }
+        return childNode;
+    }
 
     /////////////////////////////
 
     struct MemoryPool_t {
-        std::vector<TrieNode_t*> _m;
-        size_t allocated; // nodes given from the latest block
+        std::vector<TrieNodeS_t*> _mS;
+        size_t allocatedS; // nodes given from the latest block
 
-        MemoryPool_t() : allocated(0) {
-            _m.reserve(128);
-            _m.push_back(new TrieNode_t[MEMORY_POOL_BLOCK_SIZE]);
+        std::vector<TrieNodeL_t*> _mL;
+        size_t allocatedL; // nodes given from the latest block
+        
+        MemoryPool_t() : allocatedS(0), allocatedL(0) {
+            _mS.reserve(128);
+            _mS.push_back(new TrieNodeS_t[MEMORY_POOL_BLOCK_SIZE]);
+            
+            _mL.reserve(128);
+            _mL.push_back(new TrieNodeL_t[MEMORY_POOL_BLOCK_SIZE_L]);
         }
 
-        inline TrieNode_t* _new() {
-            //return new TrieNode_t();
-            if (allocated >= MEMORY_POOL_BLOCK_SIZE) {
-                _m.push_back(new TrieNode_t[MEMORY_POOL_BLOCK_SIZE]);
-                allocated = 0;
+        
+        inline TrieNodeL_t* _newNodeL() {
+            //return new TrieNodeL_t();
+            if (allocatedL >= MEMORY_POOL_BLOCK_SIZE_L) {
+                _mL.push_back(new TrieNodeL_t[MEMORY_POOL_BLOCK_SIZE_L]);
+                allocatedL = 0;
             }
-            return &_m.back()[allocated++];
+            return _mL.back() + allocatedL++;
+        }
+        
+        inline TrieNodeS_t* _newNodeS() {
+            //return new TrieNode_t();
+            if (allocatedS >= MEMORY_POOL_BLOCK_SIZE) {
+                _mS.push_back(new TrieNodeS_t[MEMORY_POOL_BLOCK_SIZE]);
+                allocatedS = 0;
+            }
+            return _mS.back() + allocatedS++;
+        }
+        
+        inline TrieNode_t* _new() {
+            return new TrieNode_t();
         }
     } MemoryPool;
 
     inline static TrieNode_t* init(TrieNode_t *node, NodeType t, TrieNode_t* p) {
         node->_Parent = p;
         node->Type = t;
-        if (t == NodeType::L) {
-            node->DtL.Children.reserve(TYPE_L_MAX); 
-            node->DtL.Children.resize(TYPE_L_MAX, nullptr);
-        }
         return node;
     }
 
-    inline static TrieNode_t* _newTrieNode(TrieNode_t*p) {
-        return init(MemoryPool._new(), DEFAULT_NODE_TYPE, p);
+    inline static NodeChild _newTrieNodeS(NodeChild p, size_t depth) {
+        if (depth < TYPE_X_DEPTH) {
+            TrieNodeS_t *node = MemoryPool._newNodeS();
+            node->_Parent = p;
+            node->Type = NodeType::S;
+            return node;
+        }
+        //return init(MemoryPool._new(), NodeType::X, p);
+        abort();
+        return (TrieNodeS_t*)nullptr;
     }
+    inline static NodeChild _newTrieNodeL(NodeChild p, size_t depth) {
+        if (depth < TYPE_X_DEPTH) {
+            TrieNodeL_t *node = MemoryPool._newNodeL();
+            node->_Parent = p;
+            node->Type = NodeType::L;
+            std::fill_n(node->DtL.Children, TYPE_L_MAX, nullptr);
+            return node;
+        }
+        //return init(MemoryPool._new(), NodeType::X, p);
+        abort();
+        return (TrieNodeL_t*)nullptr;
+    }
+    
     inline static TrieNode_t* _newTrieNode(TrieNode_t*p, size_t depth) {
         if (depth < TYPE_X_DEPTH) {
             return init(MemoryPool._new(), DEFAULT_NODE_TYPE, p);
-        } else {
-            return init(MemoryPool._new(), NodeType::X, p);
         }
+        return init(MemoryPool._new(), NodeType::X, p);
     }
+    
 
 
     ////////////////////////////
 
 
     // @param s The whole ngram
-    static TrieNode_t* AddString(TrieNode_t *cNode, const std::string& s) {
+    static NodeChild AddString(NodeChild cNode, const std::string& s) {
         const size_t bsz = s.size();
         const uint8_t* bs = reinterpret_cast<const uint8_t*>(s.data());
 
         for (size_t bidx = 0; bidx < bsz; bidx++) {
             const uint8_t cb = bs[bidx];
 
-            switch(cNode->Type) {
+            switch(cNode.L->Type) {
                 case NodeType::S:
                     {
+                        auto sNode = cNode.S;
                         size_t cidx;
-                        auto& childrenIndex = cNode->DtS.ChildrenIndex;
-                        const size_t csz = cNode->DtS.Size;
+                        auto& childrenIndex = sNode->DtS.ChildrenIndex;
+                        const size_t csz = sNode->DtS.Size;
                         for (cidx = 0; cidx<csz; cidx++) {
                             if (childrenIndex[cidx] == cb) {
                                 break;
@@ -190,28 +283,29 @@ namespace trie {
                         }
                         if (cidx >= csz) {
                             if (csz == TYPE_S_MAX) {
-                                cNode = cNode->_growTypeSWith(cb);
+                                cNode = _growTypeSWith(sNode, bs[bidx-1], cb);
                             } else {
-                                cNode->DtS.Children[cNode->DtS.Size++] = _newTrieNode(cNode, bidx);
+                                sNode->DtS.Children[sNode->DtS.Size++] = _newTrieNodeS(cNode, bidx);
                                 childrenIndex[csz] = cb;
-                                cNode = cNode->DtS.Children[csz];
+                                cNode = sNode->DtS.Children[csz];
                             }
                         } else {
-                            cNode = cNode->DtS.Children[cidx];
+                            cNode = sNode->DtS.Children[cidx];
                         }
 
                         break;
                     }
                 case NodeType::L:
                     {
-                        if (!cNode->DtL.Children[cb]) {
-                            cNode->DtL.Children[cb] = _newTrieNode(cNode, bidx);
+                        if (!cNode.L->DtL.Children[cb]) {
+                            cNode.L->DtL.Children[cb] = _newTrieNodeS(cNode, bidx);
                         }
-                        cNode = cNode->DtL.Children[cb];
+                        cNode = cNode.L->DtL.Children[cb];
                         break;
                     }
                 case NodeType::X:
                     {
+                        /*
                         const std::string key(s.substr(bidx));
                         auto it = cNode->ChildrenMap.find(key);
                         if (it == cNode->ChildrenMap.end()) {
@@ -219,6 +313,8 @@ namespace trie {
                         }
                         cNode = it->second; bidx = bsz;
                         break;
+                        */
+                        abort();
                     }
                 default:
                     abort();
@@ -229,19 +325,20 @@ namespace trie {
     }
 
     // @param s The whole ngram
-    static TrieNode_t* FindString(TrieNode_t* cNode, const std::string& s) {
+    static NodeChild FindString(NodeChild cNode, const std::string& s) {
         const size_t bsz = s.size();
         const uint8_t* bs = reinterpret_cast<const uint8_t*>(s.data());
 
         for (size_t bidx = 0; bidx < bsz; bidx++) {
             const uint8_t cb = bs[bidx];
 
-            switch(cNode->Type) {
+            switch(cNode.L->Type) {
                 case NodeType::S:
                     {
+                        auto sNode = cNode.S;
                         size_t cidx;
-                        const auto& childrenIndex = cNode->DtS.ChildrenIndex;
-                        const size_t csz = cNode->DtS.Size;
+                        const auto& childrenIndex = sNode->DtS.ChildrenIndex;
+                        const size_t csz = sNode->DtS.Size;
                         for (cidx = 0; cidx<csz; cidx++) {
                             if (childrenIndex[cidx] == cb) {
                                 break;
@@ -251,19 +348,20 @@ namespace trie {
                             return nullptr;
                         }
 
-                        cNode = cNode->DtS.Children[cidx];
-                        break;
+                        cNode = sNode->DtS.Children[cidx];
+                        break;    
                     }
                 case NodeType::L:
                     {
-                        if (!cNode->DtL.Children[cb]) {
+                        if (!cNode.L->DtL.Children[cb]) {
                             return nullptr;
                         }
-                        cNode = cNode->DtL.Children[cb];
+                        cNode = cNode.L->DtL.Children[cb];
                         break;
                     }
                 case NodeType::X:
                     {
+                        /*
                         const std::string key(s.substr(bidx));
                         auto it = cNode->ChildrenMap.find(key);
                         if (it == cNode->ChildrenMap.end()) {
@@ -271,6 +369,7 @@ namespace trie {
                         }
                         cNode = it->second; bidx = bsz;
                         break;
+                        */
                     }
                 default:
                     abort();
@@ -326,7 +425,7 @@ namespace trie {
             // make sure that the ngram is not ending in the middle of a word
             if (ngsz < cbssz && cbs[ngsz] != ' ') { continue; }
 
-            if ((std::strncmp(ngram.c_str()+firstWordSz, firstWord.first+firstWordSz, ngsz-firstWordSz) == 0) && it->second->IsValid(opIdx)) {
+            if ((std::strncmp(ngram.c_str()+firstWordSz, firstWord.first+firstWordSz, ngsz-firstWordSz) == 0) && it->second->State.IsValid(opIdx)) {
                 results.push_back(bidx + ngsz);
             }
         }
@@ -335,7 +434,7 @@ namespace trie {
     }
 
     // @param s The whole doc prefix that we need to find ALL NGRAMS matching
-    static std::vector<size_t> FindAll(TrieNode_t* cNode, const char *s, const size_t docSize, int opIdx) {
+    static std::vector<size_t> FindAll(NodeChild cNode, const char *s, const size_t docSize, int opIdx) {
         const size_t bsz = docSize;
         const uint8_t* bs = reinterpret_cast<const uint8_t*>(s);
 
@@ -345,12 +444,13 @@ namespace trie {
         for (size_t bidx = 0; bidx < bsz; bidx++) {
             const uint8_t cb = bs[bidx];
 
-            switch(cNode->Type) {
+            switch(cNode.L->Type) {
                 case NodeType::S:
                     {
+                        auto sNode = cNode.S;
                         size_t cidx;
-                        const auto& childrenIndex = cNode->DtS.ChildrenIndex;
-                        const size_t csz = cNode->DtS.Size;
+                        const auto& childrenIndex = sNode->DtS.ChildrenIndex;
+                        const size_t csz = sNode->DtS.Size;
                         for (cidx = 0; cidx<csz; cidx++) {
                             if (childrenIndex[cidx] == cb) {
                                 break;
@@ -360,20 +460,21 @@ namespace trie {
                             return std::move(results);
                         }
 
-                        cNode = cNode->DtS.Children[cidx];
+                        cNode = sNode->DtS.Children[cidx];
                         break;
                     }
                 case NodeType::L:
                     {
-                        if (!cNode->DtL.Children[cb]) {
+                        if (!cNode.L->DtL.Children[cb]) {
                             return std::move(results);
                         }
-                        cNode = cNode->DtL.Children[cb];
+                        cNode = cNode.L->DtL.Children[cb];
                         break;
                     }
                 case NodeType::X:
                     {
-                        return _findAllTypeX(cNode, results, s, bidx, bsz, opIdx);
+                        //return _findAllTypeX(cNode, results, s, bidx, bsz, opIdx);
+                        abort();
                     }
                 default:
                     abort();
@@ -381,14 +482,14 @@ namespace trie {
 
             // For Types S,M,L
             // at the end of each word check if the ngram so far is a valid result
-            if (bs[bidx+1] == ' ' && cNode->IsValid(opIdx)) {
+            if (bs[bidx+1] == ' ' && cNode.L->State.IsValid(opIdx)) {
                 results.push_back(bidx+1);
             }
         }
 
         // For Types S,M,L
         // We are here it means the whole doc matched the ngram ending at cNode
-        if (cNode && cNode->IsValid(opIdx)) {
+        if (cNode && cNode.L->State.IsValid(opIdx)) {
             results.emplace_back(bsz);
         }
 
@@ -399,8 +500,9 @@ namespace trie {
     size_t NumberOfGrows = 0;
     size_t NumberOfNodes = 0;
     size_t xChMin = 999999, xChMax = 0, xChTotal = 0, xTotal = 0, xCh0 = 0;
-    static void _takeAnalytics(TrieNode_t *cNode) {
+    static void _takeAnalytics(NodeChild cNode) {
         NumberOfNodes++;
+        /*
         switch(cNode->Type) {
             case NodeType::S:
                 {
@@ -436,15 +538,16 @@ namespace trie {
             default:
                 abort();
         }
+        */
     }
 
     struct TrieRoot_t {
-        TrieNode_t *Root;
+        NodeChild Root;
 
         TrieRoot_t() {
             std::cerr << "S" << TYPE_S_MAX << " L" << TYPE_L_MAX << " X" << TYPE_X_DEPTH << " MEM_BLOCK" << MEMORY_POOL_BLOCK_SIZE << std::endl;
-            Root = _newTrieNode(nullptr, 0);
-            if (Root == nullptr) { abort(); }
+            Root = _newTrieNodeL(nullptr, 0);
+            if (!Root) { abort(); }
         }
         ~TrieRoot_t() {
             _takeAnalytics(Root);

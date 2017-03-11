@@ -67,7 +67,7 @@ struct NgramDB {
         //std::cerr << "a::" << s << std::endl;
 	    //auto cNode = Trie.Root->AddString(&Trie.Root, s);
 	    auto cNode = cy::trie::AddString(Trie.Root, s);
-	    cNode->MarkAdd(opIdx);
+	    cNode.L->State.MarkAdd(opIdx);
 
 #ifdef DEBUG
         if (cNode != cy::trie::FindString(Trie.Root, s)) {
@@ -81,7 +81,7 @@ struct NgramDB {
         //std::cerr << "rem::" << s << std::endl;
 	    auto cNode = cy::trie::FindString(Trie.Root, s);
 	    if (cNode) {
-		    cNode->MarkDel(opIdx);
+		    cNode.L->State.MarkDel(opIdx);
 	    }
     }
 
