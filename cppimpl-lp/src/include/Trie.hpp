@@ -366,32 +366,32 @@ namespace trie {
             switch(cNode.L->Type) {
                 case NodeType::S:
                     {
-                        auto sNode = cNode.S;
-                        size_t cidx;
-                        auto& childrenIndex = sNode->DtS.ChildrenIndex;
+                        const auto sNode = cNode.S;
+                        const auto childrenIndex = sNode->DtS.ChildrenIndex;
                         const size_t csz = sNode->DtS.Size;
-                        for (cidx = 0; cidx<csz; cidx++) {
-                            if (childrenIndex[cidx] == cb) {
+                        size_t cidx = 0;
+                        for (;;) {
+                            if (cidx >= csz) {
+                                if (csz == TYPE_S_MAX) {
+                                    cNode = _growTypeSWith(sNode, bs[bidx-1], cb);
+                                } else {
+                                    sNode->DtS.Children[sNode->DtS.Size++] = _newTrieNode(cNode, bidx);
+                                    childrenIndex[csz] = cb;
+                                    cNode = sNode->DtS.Children[csz];
+                                }
                                 break;
                             }
-                        }
-                        if (cidx >= csz) {
-                            if (csz == TYPE_S_MAX) {
-                                cNode = _growTypeSWith(sNode, bs[bidx-1], cb);
-                            } else {
-                                sNode->DtS.Children[sNode->DtS.Size++] = _newTrieNode(cNode, bidx);
-                                childrenIndex[csz] = cb;
-                                cNode = sNode->DtS.Children[csz];
+                            if (childrenIndex[cidx] == cb) {
+                                cNode = sNode->DtS.Children[cidx];
+                                break;
                             }
-                        } else {
-                            cNode = sNode->DtS.Children[cidx];
+                            cidx++;
                         }
-
                         break;
                     }
                 case NodeType::M:
                     {
-                        auto mNode = cNode.M;
+                        const auto mNode = cNode.M;
                         const size_t csz = mNode->DtM.Size;
                         
                         auto key =_mm_set1_epi8(cb);
@@ -439,7 +439,7 @@ namespace trie {
                     }
                 case NodeType::X:
                     {
-                        auto xNode = cNode.X;
+                        const auto xNode = cNode.X;
                         const std::string key(s.substr(bidx));
                         auto it = xNode->ChildrenMap.find(key);
                         if (it == xNode->ChildrenMap.end()) {
@@ -468,25 +468,24 @@ namespace trie {
             switch(cNode.L->Type) {
                 case NodeType::S:
                     {
-                        auto sNode = cNode.S;
-                        size_t cidx;
-                        const auto& childrenIndex = sNode->DtS.ChildrenIndex;
+                        const auto sNode = cNode.S;
+                        const auto childrenIndex = sNode->DtS.ChildrenIndex;
                         const size_t csz = sNode->DtS.Size;
-                        for (cidx = 0; cidx<csz; cidx++) {
+                        size_t cidx = 0;
+                        for (;;) {
+                            if (cidx >= csz) { return nullptr; }
                             if (childrenIndex[cidx] == cb) {
+                                cNode = sNode->DtS.Children[cidx];
                                 break;
                             }
-                        }
-                        if (cidx >= csz) {
-                            return nullptr;
+                            cidx++;
                         }
 
-                        cNode = sNode->DtS.Children[cidx];
                         break;    
                     }
                 case NodeType::M:
                     {
-                        auto mNode = cNode.M;
+                        const auto mNode = cNode.M;
                         const size_t csz = mNode->DtM.Size;
 
                         auto key =_mm_set1_epi8(cb);
@@ -499,7 +498,7 @@ namespace trie {
                         }
                         
 #ifdef DEBUG
-                        auto& childrenIndex = mNode->DtM.ChildrenIndex;
+                        auto childrenIndex = mNode->DtM.ChildrenIndex;
                         size_t cidx = 0;
                         for (cidx = 0; cidx<csz; cidx++) {
                             if (childrenIndex[cidx] == cb) {
@@ -529,9 +528,9 @@ namespace trie {
                     }
                 case NodeType::X:
                     {
-                        auto xNode = cNode.X;
+                        const auto xNode = cNode.X;
                         const std::string key(s.substr(bidx));
-                        auto it = xNode->ChildrenMap.find(key);
+                        const auto it = xNode->ChildrenMap.find(key);
                         if (it == xNode->ChildrenMap.end()) {
                             return nullptr;
                         }
@@ -614,25 +613,23 @@ namespace trie {
             switch(cNode.L->Type) {
                 case NodeType::S:
                     {
-                        auto sNode = cNode.S;
-                        size_t cidx;
-                        const auto& childrenIndex = sNode->DtS.ChildrenIndex;
+                        const auto sNode = cNode.S;
+                        const auto childrenIndex = sNode->DtS.ChildrenIndex;
                         const size_t csz = sNode->DtS.Size;
-                        for (cidx = 0; cidx<csz; cidx++) {
+                        size_t cidx = 0;
+                        for (;;) {
+                            if (cidx >= csz) { return std::move(results); }
                             if (childrenIndex[cidx] == cb) {
+                                cNode = sNode->DtS.Children[cidx];
                                 break;
                             }
+                            cidx++;
                         }
-                        if (cidx >= csz) {
-                            return std::move(results);
-                        }
-
-                        cNode = sNode->DtS.Children[cidx];
                         break;
                     }
                 case NodeType::M:
                     {
-                        auto mNode = cNode.M;
+                        const auto mNode = cNode.M;
                         const size_t csz = mNode->DtM.Size;
                         
                         auto key =_mm_set1_epi8(cb);

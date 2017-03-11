@@ -18,11 +18,10 @@
 
 #include <omp.h>
 
-
 //#define USE_OPENMP
 //#define USE_PARALLEL
 
-size_t NUM_THREADS = 1;
+size_t NUM_THREADS;
 size_t DOC_SPLIT_SIZE = 1;
 
 cy::Timer_t timer;
@@ -203,9 +202,6 @@ void queryEvaluationParallel(NgramDB *ngdb, const OpQuery& op) {
             startIdxEnd = docSz;
         }
         
-//#pragma omp critical
-//        std::cerr << "::" << omp_get_num_threads() << "-" << omp_get_thread_num() << "::" << start << ":" << startIdxEnd << std::endl;
-
         for (; start < docSz; ) {
             // find start of word
             for (start = end; start < startIdxEnd && doc[start] == ' '; ++start) {}
@@ -244,16 +240,6 @@ void processWorkload(istream& in, NgramDB *ngdb, WorkersContext *wctx, int opIdx
             if (!in.eof()) {
 			    std::cerr << "Error" << std::endl;
             }
-
-            size_t total = timer.getChrono(start);
-            if (total > 20000000) {
-                for (;;) {
-                    if (timer.getChrono(start) > 45000000) {
-                        break;
-                    }
-                }
-            }
-
 			break;
 		}
 		
