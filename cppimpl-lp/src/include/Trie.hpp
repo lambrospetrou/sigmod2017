@@ -43,7 +43,7 @@ namespace trie {
     constexpr size_t TYPE_X_DEPTH = 24;
     
     constexpr size_t MEMORY_POOL_BLOCK_SIZE_S = 1<<20;
-    constexpr size_t MEMORY_POOL_BLOCK_SIZE_M = 1<<10;
+    constexpr size_t MEMORY_POOL_BLOCK_SIZE_M = 1<<15;
     constexpr size_t MEMORY_POOL_BLOCK_SIZE_L = 1<<10;
     constexpr size_t MEMORY_POOL_BLOCK_SIZE_X = 1<<10;
 
@@ -158,15 +158,23 @@ namespace trie {
 
     inline static NodePtr _growTypeSWith(const TrieNodeS_t *cNode, const uint8_t pb, const uint8_t cb) {
         auto parent = cNode->_Parent;
-        auto newNode = _newTrieNodeL(cNode->_Parent).L;
+        auto newNode = _newTrieNodeM(cNode->_Parent).M;
         
         newNode->State = std::move(cNode->State);
+        newNode->DtM.Size = TYPE_S_MAX+1;
+
+        //std::memcpy(newNode->DtM.ChildrenIndex, cNode->DtS.ChildrenIndex, TYPE_S_MAX * sizeof(uint8_t));
+        //std::memcpy(newNode->DtM.Children, cNode->DtS.Children, TYPE_S_MAX * sizeof(NodePtr*));        
         for (size_t cidx=0; cidx<TYPE_S_MAX; ++cidx) {
-            cNode->DtS.Children[cidx].S->_Parent = newNode;
-            newNode->DtL.Children[cNode->DtS.ChildrenIndex[cidx]] = cNode->DtS.Children[cidx];
+            newNode->DtM.Children[cidx] = cNode->DtS.Children[cidx];
+            newNode->DtM.Children[cidx].S->_Parent = newNode;
+            newNode->DtM.ChildrenIndex[cidx] = cNode->DtS.ChildrenIndex[cidx];
         }
+
         auto childNode = _newTrieNode(newNode);
-        newNode->DtL.Children[cb] = childNode;
+        newNode->DtM.ChildrenIndex[TYPE_S_MAX] = cb;
+        newNode->DtM.Children[TYPE_S_MAX] = childNode;
+
         switch(parent.S->Type) {
         case NodeType::S: 
         {
@@ -174,6 +182,17 @@ namespace trie {
             for (size_t cidx=0; cidx<sp->DtS.Size; ++cidx) {
                 if (sp->DtS.ChildrenIndex[cidx] == pb) {
                     sp->DtS.Children[cidx] = newNode;
+                    break;
+                }
+            }
+            break; 
+        }
+        case NodeType::M: 
+        {
+            auto sp = parent.M;
+            for (size_t cidx=0; cidx<sp->DtM.Size; ++cidx) {
+                if (sp->DtM.ChildrenIndex[cidx] == pb) {
+                    sp->DtM.Children[cidx] = newNode;
                     break;
                 }
             }
@@ -238,6 +257,9 @@ namespace trie {
         std::vector<TrieNodeS_t*> _mS;
         size_t allocatedS; // nodes given from the latest block
 
+        std::vector<TrieNodeM_t*> _mM;
+        size_t allocatedM; // nodes given from the latest block
+        
         std::vector<TrieNodeL_t*> _mL;
         size_t allocatedL; // nodes given from the latest block
         
@@ -247,6 +269,9 @@ namespace trie {
         MemoryPool_t() : allocatedS(0), allocatedL(0), allocatedX(0) {
             _mS.reserve(128);
             _mS.push_back(new TrieNodeS_t[MEMORY_POOL_BLOCK_SIZE_S]);
+            
+            _mM.reserve(128);
+            _mM.push_back(new TrieNodeM_t[MEMORY_POOL_BLOCK_SIZE_M]);
             
             _mL.reserve(128);
             _mL.push_back(new TrieNodeL_t[MEMORY_POOL_BLOCK_SIZE_L]);
@@ -266,14 +291,11 @@ namespace trie {
         }
 
         inline TrieNodeM_t* _newNodeM() {
-            return new TrieNodeM_t();
-            /*
             if (allocatedM >= MEMORY_POOL_BLOCK_SIZE_M) {
                 _mM.push_back(new TrieNodeM_t[MEMORY_POOL_BLOCK_SIZE_M]);
-                allocatedS = 0;
+                allocatedM = 0;
             }
             return _mM.back() + allocatedM++;
-            */
         }
         
         inline TrieNodeL_t* _newNodeL() {
@@ -625,7 +647,7 @@ namespace trie {
     }
 
 
-    size_t NumberOfGrows = 0;
+    size_t GrowsM = 0, GrowsL = 0;
     size_t NumberOfNodes = 0;
     size_t xChMin = 999999, xChMax = 0, xChTotal = 0, xTotal = 0, xCh0 = 0;
     static void _takeAnalytics(NodePtr cNode) {
@@ -642,6 +664,7 @@ namespace trie {
                 }
             case NodeType::M:
                 {
+                    GrowsM++;
                     auto mNode = cNode.M;
                     const size_t csz = mNode->DtM.Size;
                     for (size_t cidx = 0; cidx<csz; cidx++) {
@@ -651,8 +674,7 @@ namespace trie {
                 }
             case NodeType::L:
                 {
-                    NumberOfGrows++;
-                    
+                    GrowsL++;
                     const auto& children = cNode.L->DtL.Children;
                     for (size_t cidx = 0; cidx<TYPE_L_MAX; cidx++) {
                         if (children[cidx]) {
@@ -683,6 +705,7 @@ namespace trie {
         TrieRoot_t() {
             std::cerr << "S" << TYPE_S_MAX << " L" << TYPE_L_MAX << " X" << TYPE_X_DEPTH;
             std::cerr << " MEM_S" << MEMORY_POOL_BLOCK_SIZE_S;
+            std::cerr << " MEM_M" << MEMORY_POOL_BLOCK_SIZE_M;
             std::cerr << " MEM_L" << MEMORY_POOL_BLOCK_SIZE_L;
             std::cerr << " MEM_X" << MEMORY_POOL_BLOCK_SIZE_X;
             std::cerr << std::endl;
@@ -692,7 +715,7 @@ namespace trie {
         }
         ~TrieRoot_t() {
             _takeAnalytics(Root);
-            std::cerr << "upgrades::" << NumberOfGrows << " #nodes::" << NumberOfNodes << std::endl;
+            std::cerr << "growsM::" << GrowsM << " growsL::" << GrowsL << " #nodes::" << NumberOfNodes << std::endl;
             std::cerr << "MAP::" << xTotal << "::" << xCh0 << "::" << xChMin << "::" << xChMax << "::" << (xChTotal*1.0/xTotal) << std::endl;
         }
     };
