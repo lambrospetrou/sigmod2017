@@ -26,6 +26,8 @@
 #include <map>
 #include <cstring>
 
+//#define USE_TYPE_X
+
 namespace cy {
 namespace trie {
 
@@ -146,7 +148,7 @@ namespace trie {
         auto parent = cNode->_Parent;
         auto newNode = _newTrieNodeL(cNode->_Parent).L;
         
-        newNode->State = cNode->State;
+        newNode->State = std::move(cNode->State);
         for (size_t cidx=0; cidx<TYPE_S_MAX; ++cidx) {
             cNode->DtS.Children[cidx].S->_Parent = newNode;
             newNode->DtL.Children[cNode->DtS.ChildrenIndex[cidx]] = cNode->DtS.Children[cidx];
@@ -192,9 +194,10 @@ namespace trie {
             
             _mL.reserve(128);
             _mL.push_back(new TrieNodeL_t[MEMORY_POOL_BLOCK_SIZE_L]);
-            
+#ifdef USE_TYPE_X            
             _mX.reserve(128);
             _mX.push_back(new TrieNodeX_t[MEMORY_POOL_BLOCK_SIZE_X]);
+#endif
         }
 
         
@@ -246,10 +249,14 @@ namespace trie {
         return node;
     }
     inline static NodePtr _newTrieNode(NodePtr p, size_t depth) {
+#ifdef USE_TYPE_X
         if (depth < TYPE_X_DEPTH) {
             return _newTrieNodeS(p);
         }
         return _newTrieNodeX(p);
+#else
+        return _newTrieNodeS(p);
+#endif
     }
     
 
@@ -496,13 +503,13 @@ namespace trie {
     size_t xChMin = 999999, xChMax = 0, xChTotal = 0, xTotal = 0, xCh0 = 0;
     static void _takeAnalytics(NodePtr cNode) {
         NumberOfNodes++;
-        /*
-        switch(cNode->Type) {
+        switch(cNode.S->Type) {
             case NodeType::S:
                 {
-                    const size_t csz = cNode->DtS.Size;
+                    auto sNode = cNode.S;
+                    const size_t csz = sNode->DtS.Size;
                     for (size_t cidx = 0; cidx<csz; cidx++) {
-                        _takeAnalytics(cNode->DtS.Children[cidx]);
+                        _takeAnalytics(sNode->DtS.Children[cidx]);
                     }
                     break;
                 }
@@ -510,7 +517,7 @@ namespace trie {
                 {
                     NumberOfGrows++;
                     
-                    const auto& children = cNode->DtL.Children;
+                    const auto& children = cNode.L->DtL.Children;
                     for (size_t cidx = 0; cidx<TYPE_L_MAX; cidx++) {
                         if (children[cidx]) {
                             _takeAnalytics(children[cidx]);
@@ -521,7 +528,7 @@ namespace trie {
             case NodeType::X:
                 {
                     xTotal++;
-                    const size_t chsz = cNode->ChildrenMap.size();
+                    const size_t chsz = cNode.X->ChildrenMap.size();
                     xChTotal += chsz;
                     if (chsz == 0) { xCh0++; }
                     if (chsz < xChMin) { xChMin = chsz; }
@@ -532,7 +539,6 @@ namespace trie {
             default:
                 abort();
         }
-        */
     }
 
     struct TrieRoot_t {
