@@ -248,22 +248,17 @@ void queryBatchEvaluation(NgramDB *ngdb, WorkersContext *wctx, const std::vector
     size_t qidx = 0;
     for(;;) { 
 
-        queryEvaluationInterleaved(ngdb, (*opQs)[qidx], (*gResults)[qidx]);
+        //#pragma omp critical
+        //{ std::cerr << pidx <<  "::" << qidx << std::endl; }
 
-        // TODO REMOVE THIS
-        //#pragma omp barrier
+        queryEvaluationInterleaved(ngdb, (*opQs)[qidx], (*gResults)[qidx]);
         
         bool iam = false;
         #pragma omp critical
-        {
-            if (++(*gResultsFinished)[qidx] == nthreads) { iam = true; }
-        }
+        { iam = (++((*gResultsFinished)[qidx]) == nthreads); }
 
         // print the results
-        //#pragma omp single nowait
-        //#pragma omp master
         if (iam) {
-            //std::cerr << pidx <<  "::started printing::" << qidx << std::endl;
             localTime = timer.getChrono();
 
             std::vector<std::string> cresult; cresult.reserve((*opQs)[qidx].Doc.size()/10);
@@ -275,7 +270,6 @@ void queryBatchEvaluation(NgramDB *ngdb, WorkersContext *wctx, const std::vector
             outputResults(std::cout, std::move(cresult));
 
             serialTime += timer.getChrono(localTime);
-            //std::cerr << pidx <<  "::finished printing::" << qidx << std::endl;
         }
         
         if (++qidx >= qsz) { return; }

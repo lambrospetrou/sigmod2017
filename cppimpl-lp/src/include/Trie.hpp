@@ -42,7 +42,7 @@ namespace trie {
     constexpr size_t TYPE_S_MAX = 2;
     constexpr size_t TYPE_M_MAX = 16;
     constexpr size_t TYPE_L_MAX = 256;
-    constexpr size_t TYPE_X_DEPTH = 20;
+    constexpr size_t TYPE_X_DEPTH = 30;
     
     constexpr size_t MEMORY_POOL_BLOCK_SIZE_S = 1<<20;
     constexpr size_t MEMORY_POOL_BLOCK_SIZE_M = 1<<15;

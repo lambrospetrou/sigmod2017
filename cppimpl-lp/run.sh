@@ -12,8 +12,8 @@ while [ "$i" -lt "$NUM_THREADS" ]; do
     TA="$TA$(($i * 2)),"
     i=$(($i + 1))
 done
-
-THREAD_AFFINITIES="$TA"
+THREAD_AFFINITIES=$( echo "$TA" | sed 's/\(.*\)\,$/\1/' )
+#echo $THREAD_AFFINITIES
 
 
 # OpenMP configuration
