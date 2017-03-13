@@ -66,6 +66,7 @@ namespace trie {
     inline static NodePtr _newTrieNode(NodePtr p, size_t depth = 0);
     //////////////////////////////////////////
 
+
     /////////////////////////////////////////
 
     struct RecordHistory {
@@ -545,7 +546,7 @@ namespace trie {
         return cNode;
     }
 
-    inline static std::vector<size_t> _findAllTypeX(TrieNodeX_t *cNode, std::vector<size_t>& results, const char*s, size_t bidx, const size_t bsz, int opIdx) {
+    inline static std::vector<std::pair<size_t, uint64_t>> _findAllTypeX(TrieNodeX_t *cNode, std::vector<std::pair<size_t,uint64_t>>& results, const char*s, size_t bidx, const size_t bsz, int opIdx) {
 
         // 1. Find the next word
         // 2. Fetch the range of ngrams matching that word (lower_bound/equal_range)
@@ -592,7 +593,7 @@ namespace trie {
             if (ngsz < cbssz && cbs[ngsz] != ' ') { continue; }
 
             if ((std::strncmp(ngram.c_str()+firstWordSz, firstWord.first+firstWordSz, ngsz-firstWordSz) == 0) && it->second.S->State.IsValid(opIdx)) {
-                results.push_back(bidx + ngsz);
+                results.emplace_back(bidx + ngsz, (uint64_t)it->second.L);
             }
         }
 
@@ -600,12 +601,12 @@ namespace trie {
     }
 
     // @param s The whole doc prefix that we need to find ALL NGRAMS matching
-    static std::vector<size_t> FindAll(NodePtr cNode, const char *s, const size_t docSize, int opIdx) {
+    static std::vector<std::pair<size_t, uint64_t>> FindAll(NodePtr cNode, const char *s, const size_t docSize, int opIdx) {
         const size_t bsz = docSize;
         const uint8_t* bs = reinterpret_cast<const uint8_t*>(s);
 
-        // Holds the endPos for each valid ngram found in the given doc
-        std::vector<size_t> results;
+        // Holds the endPos for each valid ngram found in the given doc and the identifier for the ngram (pointer for now)
+        std::vector<std::pair<size_t, uint64_t>> results;
 
         for (size_t bidx = 0; bidx < bsz; bidx++) {
             const uint8_t cb = bs[bidx];
@@ -662,14 +663,14 @@ namespace trie {
             // For Types S,M,L
             // at the end of each word check if the ngram so far is a valid result
             if (bs[bidx+1] == ' ' && cNode.L->State.IsValid(opIdx)) {
-                results.push_back(bidx+1);
+                results.emplace_back(bidx+1, (uint64_t)cNode.L);
             }
         }
 
         // For Types S,M,L
         // We are here it means the whole doc matched the ngram ending at cNode
         if (cNode && cNode.L->State.IsValid(opIdx)) {
-            results.emplace_back(bsz);
+            results.emplace_back(bsz, (uint64_t)cNode.L);
         }
 
         return std::move(results);

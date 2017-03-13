@@ -30,6 +30,7 @@ template<typename T>
 using IntMap = btree::btree_map<int, T>;
 //using IntMap = std::unordered_map<int, T>;
 using IntSet = btree::btree_set<int>;
+using UInt64Set = btree::btree_set<uint64_t>;
 using StringSet = btree::btree_set<std::string>;
 
 using namespace std;
@@ -61,6 +62,15 @@ struct Op_t {
 
     Op_t() {}
     Op_t(string l, int idx, OpType_t t) : Line(std::move(l)), OpIdx(idx), OpType(t) {}
+};
+
+struct Result_t {
+    const char* start;
+    const char* end;
+    uint64_t ngramIdx;
+
+    Result_t() {}
+    Result_t(const char* s, const char*e, uint64_t id) : start(s), end(e), ngramIdx(id) {}
 };
 
 struct NgramDB {
@@ -97,13 +107,13 @@ struct NgramDB {
     // TODO Return a vector of pairs [start, end) for each ngram matched and the NGRAM's IDX (create this at each trie node)
     // TODO this way we do not copy strings so many times and the uniqueness when printing the results will use the ngram IDX
     // TODO for super fast hashing in the visited set, whereas now we use strings as keys!!!
-    std::vector<std::string> FindNgrams(const std::string& doc, size_t docStart, size_t opIdx) { 
+    std::vector<Result_t> FindNgrams(const std::string& doc, size_t docStart, size_t opIdx) { 
         // TODO Use char* directly to the doc to avoid copying
-        std::vector<std::string> results;
-        
+        std::vector<Result_t> results;
+        const char*docStr = doc.data();
         const auto& ngramResults = cy::trie::FindAll(Trie.Root, doc.data()+docStart, doc.size()-docStart, opIdx);
         for (const auto& ngramPos : ngramResults) {
-            results.push_back(doc.substr(docStart, ngramPos));
+            results.emplace_back(docStr+docStart, docStr+docStart+ngramPos.first, ngramPos.second);
         }
 
         return std::move(results);
@@ -119,24 +129,28 @@ struct WorkersContext {
 //////////////////////////////////////
 
 // TODO Optimization - See above to use ngram [start, end) pairs and ngram IDs
-void outputResults(std::ostream& out, const std::vector<std::string>& results) {
+void outputResults(std::ostream& out, const std::vector<Result_t>& results) {
     if (results.empty()) {
         out << "-1" << std::endl;
         return;
     }
 
     // Filter results
-    StringSet visited;
+    UInt64Set visited;
 
     std::stringstream ss;
-    ss << results[0];
-    visited.insert(results[0]);
+    //std::cerr << "ngram: " << (uint64_t)results[0].start << "-" << (uint64_t)results[0].end << std::endl;
+    ss << std::string(results[0].start, results[0].end-results[0].start);
+    visited.insert(results[0].ngramIdx);
     for (size_t i=1,sz=results.size(); i<sz; ++i) {
         const auto& ngram = results[i];
-        auto it = visited.find(ngram);
+
+        //std::cerr << "ngram: " << (uint64_t)ngram.start << "-" << (uint64_t)ngram.end << std::endl;
+
+        auto it = visited.find(ngram.ngramIdx);
         if (it == visited.end()) {
-            visited.insert(it, ngram);
-            ss << "|" << ngram;
+            visited.insert(it, ngram.ngramIdx);
+            ss << "|" << std::string(ngram.start, ngram.end-ngram.start);
         }
     }
 	ss << std::endl;
@@ -144,21 +158,21 @@ void outputResults(std::ostream& out, const std::vector<std::string>& results) {
     out << ss.str();
 }
 
-std::vector<std::string> queryEvaluationWithResults(NgramDB *ngdb, const OpQuery& op) {
+std::vector<Result_t> queryEvaluationWithResults(NgramDB *ngdb, const OpQuery& op) {
     const auto& doc = op.Doc;
     const size_t opIdx = op.OpIdx;
     size_t start{0}, end{0}, sz{doc.size()};
 
     size_t startIdxEnd = sz;
 
-    std::vector<std::string> results;
+    std::vector<Result_t> results;
 
     for (; start < sz; ) {
 		// find start of word
 		for (start = end; start < startIdxEnd && doc[start] == ' '; ++start) {}
         if (start >= startIdxEnd) { break; }
 
-        std::vector<std::string> cresult = ngdb->FindNgrams(doc, start, opIdx);
+        auto cresult = ngdb->FindNgrams(doc, start, opIdx);
         if (!cresult.empty()) {
             results.insert(results.end(), cresult.begin(), cresult.end());
         }
@@ -173,7 +187,7 @@ inline void queryEvaluation(NgramDB *ngdb, const OpQuery& op) {
 }
 
 uint64_t timeFindAll = 0;
-void queryEvaluationInterleaved(NgramDB *ngdb, const OpQuery& op, std::vector<std::vector<std::string>>& gResult) {
+void queryEvaluationInterleaved(NgramDB *ngdb, const OpQuery& op, std::vector<std::vector<Result_t>>& gResult) {
     const size_t pidx = omp_get_thread_num();
     const size_t nthreads = omp_get_num_threads();
 
@@ -183,7 +197,7 @@ void queryEvaluationInterleaved(NgramDB *ngdb, const OpQuery& op, std::vector<st
 
     size_t startIdxEnd = sz;
 
-    std::vector<std::pair<size_t, std::vector<std::string>>> local; local.reserve(sz/(nthreads*10));
+    std::vector<std::pair<size_t, std::vector<Result_t>>> local; local.reserve(doc.size()/32);
 
     size_t wordidx = 0;
     for (; start < sz; ) {
@@ -214,7 +228,7 @@ void queryEvaluationInterleaved(NgramDB *ngdb, const OpQuery& op, std::vector<st
     }
 }
 uint64_t serialTime = 0;
-void queryBatchEvaluation(NgramDB *ngdb, WorkersContext *wctx, const std::vector<OpQuery> *opQs, std::vector<std::vector<std::vector<std::string>>> *gResults, std::vector<size_t> *gResultsFinished) {
+void queryBatchEvaluation(NgramDB *ngdb, WorkersContext *wctx, const std::vector<OpQuery> *opQs, std::vector<std::vector<std::vector<Result_t>>> *gResults, std::vector<size_t> *gResultsFinished) {
     const size_t qsz = opQs->size(); //std::cerr << qsz << "_";
     
     const size_t nthreads = omp_get_num_threads();
@@ -261,7 +275,7 @@ void queryBatchEvaluation(NgramDB *ngdb, WorkersContext *wctx, const std::vector
         if (iam) {
             localTime = timer.getChrono();
 
-            std::vector<std::string> cresult; cresult.reserve((*opQs)[qidx].Doc.size()/10);
+            std::vector<Result_t> cresult; cresult.reserve((*opQs)[qidx].Doc.size()/10);
             for (const auto& wr : (*gResults)[qidx]) {
                 if (!wr.empty()) {
                     cresult.insert(cresult.end(), wr.begin(), wr.end());
@@ -342,7 +356,7 @@ void processWorkload(istream& in, NgramDB *ngdb, WorkersContext *wctx, int opIdx
 
     uint64_t tA{0}, tD{0}, tQ{0};
 
-    std::vector<std::vector<std::vector<std::string>>> gResults;
+    std::vector<std::vector<std::vector<Result_t>>> gResults;
     std::vector<size_t> gResultsFinished;
     
     vector<OpQuery> opQs; opQs.reserve(256);
@@ -415,8 +429,8 @@ void processWorkload(istream& in, NgramDB *ngdb, WorkersContext *wctx, int opIdx
 
     }// end of outermost loop - exit program
 }
-	std::cerr << "proc::" << timer.getChrono(start) << ":" << tA << ":" << tD << ":" << tQ << ":" << timeReading << std::endl;
-	std::cerr << "proc::" << tQ << ":" << serialTime << " findAll:" << timeFindAll << std::endl;
+	std::cerr << "proc::" << timer.getChrono(start) << ":" << tA << ":" << tD << ":" << tQ << " reads:" << timeReading << std::endl;
+	std::cerr << "proc:: q" << tQ << " serialpart:" << serialTime << " findAll:" << timeFindAll << std::endl;
 }
 
 std::unique_ptr<NgramDB> readInitial(std::istream& in, int *outOpIdx) {
