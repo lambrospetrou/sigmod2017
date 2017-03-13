@@ -252,6 +252,7 @@ void queryBatchEvaluation(NgramDB *ngdb, WorkersContext *wctx, const std::vector
         for (size_t qidx=0; qidx<qsz; qidx++) {
             const auto& doc = (*opQs)[qidx].Doc;
             const size_t numWordsApprox = std::count(doc.data(), doc.data()+doc.size(), ' ') + 1;
+            //const size_t numWordsApprox = lp::utils::count((uint8_t*)doc.data(), doc.size(), ' ') + 1;
             //std::cerr << pidx << "::" << qidx << "::words:" << numWordsApprox << "_" << doc.size() << std::endl;
             (*gResults)[qidx].resize(numWordsApprox);
         }
@@ -377,8 +378,8 @@ void processWorkload(istream& in, NgramDB *ngdb, WorkersContext *wctx, int opIdx
             exit = readNextBatch(in, ngdb, opQs, opUs, Q, opIdx);
 	        //std::cerr << opUs.size() << "::" << opQs.size() << "_";
         }
-
         #pragma omp barrier
+
         if (exit) { break; }
 
         if (opQs.empty()) { continue; }

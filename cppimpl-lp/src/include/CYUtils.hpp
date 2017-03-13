@@ -30,9 +30,17 @@ namespace lp {
 
 #define ALWAYS_INLINE  __attribute__((always_inline)) inline
 
-/*
     namespace utils {
-
+        
+        inline size_t count(const uint8_t*bs, const size_t sz, const uint8_t cb) {
+            size_t cnt = 0;
+            for (size_t i=0; i<sz; ++i) {
+                cnt += bs[i] == cb;
+            }
+            return cnt;
+        }
+        
+/*
         template<typename T>
             bool ALWAYS_INLINE exists_loop(T *a, const size_t sz, T val) {
                 for (size_t i=0; i<sz; ++i) {
@@ -195,8 +203,8 @@ namespace lp {
             do { std::this_thread::yield(); }
             while (std::chrono::high_resolution_clock::now() < tend);
         }
-    }
 */
+    }
 };
 
 #endif
