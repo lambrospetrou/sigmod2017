@@ -732,6 +732,28 @@ namespace trie {
     struct TrieRoot_t {
         NodePtr Root;
 
+        NodePtr AddNgram(const std::string& s, int opIdx) {
+            //std::cerr << "a::" << s << std::endl;
+	        auto cNode = cy::trie::AddString(Root, s);
+	        cNode.L->State.MarkAdd(opIdx);
+#ifdef DEBUG
+            if (cNode != cy::trie::FindString(Trie.Root, s)) {
+                std::cerr << "add or find is wrong!" << std::endl;
+                abort();
+            }
+#endif
+            return cNode;
+        }
+    
+        NodePtr RemoveNgram(const std::string& s, int opIdx) {
+            //std::cerr << "rem::" << s << std::endl;
+	        auto cNode = cy::trie::FindString(Root, s);
+	        if (cNode) {
+		        cNode.L->State.MarkDel(opIdx);
+	        }
+            return cNode;
+        }
+
         TrieRoot_t() {
             std::cerr << sizeof(TrieNodeS_t) << "::" << sizeof(TrieNodeM_t) <<  "::" << sizeof(TrieNodeL_t) <<  "::" << sizeof(TrieNodeX_t) << "::" << sizeof(RecordHistory) << "::" << sizeof(NodePtr) << std::endl;
             

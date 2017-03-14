@@ -5,6 +5,7 @@
 #include "include/cpp_btree/btree_map.h"
 #include "include/cpp_btree/btree_set.h"
 
+#include <cstdio>
 #include <cstdint>
 #include <iostream>
 #include <unordered_map>
@@ -83,24 +84,12 @@ struct NgramDB {
     
     void AddNgram(const std::string& s, int opIdx) {
         //std::cerr << "a::" << s << std::endl;
-	    //auto cNode = Trie.Root->AddString(&Trie.Root, s);
-	    auto cNode = cy::trie::AddString(Trie.Root, s);
-	    cNode.L->State.MarkAdd(opIdx);
-
-#ifdef DEBUG
-        if (cNode != cy::trie::FindString(Trie.Root, s)) {
-            std::cerr << "add or find is wrong!" << std::endl;
-            abort();
-        }
-#endif
+	    Trie.AddNgram(s, opIdx);
     }
     
     void RemoveNgram(const std::string& s, int opIdx) {
         //std::cerr << "rem::" << s << std::endl;
-	    auto cNode = cy::trie::FindString(Trie.Root, s);
-	    if (cNode) {
-		    cNode.L->State.MarkDel(opIdx);
-	    }
+	    Trie.RemoveNgram(s, opIdx);
     }
 
     // TODO Optimization
@@ -131,7 +120,7 @@ struct WorkersContext {
 // TODO Optimization - See above to use ngram [start, end) pairs and ngram IDs
 void outputResults(std::ostream& out, const std::vector<Result_t>& results) {
     if (results.empty()) {
-        out << "-1" << std::endl;
+        out << "-1\n";
         return;
     }
 
@@ -139,8 +128,9 @@ void outputResults(std::ostream& out, const std::vector<Result_t>& results) {
     UInt64Set visited;
 
     std::stringstream ss;
-    //std::cerr << "ngram: " << (uint64_t)results[0].start << "-" << (uint64_t)results[0].end << std::endl;
-    ss << std::string(results[0].start, results[0].end-results[0].start);
+    ss << std::move(std::string(results[0].start, results[0].end-results[0].start));
+    //out << std::move(std::string(results[0].start, results[0].end-results[0].start));
+
     visited.insert(results[0].ngramIdx);
     for (size_t i=1,sz=results.size(); i<sz; ++i) {
         const auto& ngram = results[i];
@@ -150,11 +140,11 @@ void outputResults(std::ostream& out, const std::vector<Result_t>& results) {
         auto it = visited.find(ngram.ngramIdx);
         if (it == visited.end()) {
             visited.insert(it, ngram.ngramIdx);
-            ss << "|" << std::string(ngram.start, ngram.end-ngram.start);
+            ss << "|" << std::move(std::string(ngram.start, ngram.end-ngram.start));
+            //out << "|" << std::move(std::string(ngram.start, ngram.end-ngram.start));
         }
     }
-	ss << std::endl;
-    
+	ss << "\n"; 
     out << ss.str();
 }
 
