@@ -84,12 +84,12 @@ struct NgramDB {
     
     void AddNgram(const std::string& s, int opIdx) {
         //std::cerr << "a::" << s << std::endl;
-	    Trie.AddNgram(s, opIdx);
+        cy::trie::AddNgram(&Trie, s, opIdx);
     }
     
     void RemoveNgram(const std::string& s, int opIdx) {
         //std::cerr << "rem::" << s << std::endl;
-	    Trie.RemoveNgram(s, opIdx);
+        cy::trie::RemoveNgram(&Trie, s, opIdx);
     }
 
     // TODO Optimization
