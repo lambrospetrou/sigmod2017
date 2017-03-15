@@ -112,10 +112,11 @@ namespace trie {
     template<size_t SIZE> 
         struct DataS {
             uint8_t ChildrenIndex[sizeof(uint8_t) * SIZE + sizeof(NodePtr*)*SIZE];
-            NodePtr* Children;
             size_t Size;
 
-            DataS() : Children(reinterpret_cast<NodePtr*>(ChildrenIndex + sizeof(uint8_t) * SIZE)), Size(0) {}
+            DataS() : Size(0) {}
+            
+            inline NodePtr* Children() { return reinterpret_cast<NodePtr*>(ChildrenIndex + sizeof(uint8_t) * SIZE); }
         };
 
 
@@ -257,20 +258,20 @@ namespace trie {
     ////////////////////////////
 
 
-    inline static NodePtr _growTypeSWith(MemoryPool_t *mem, const TrieNodeS_t *cNode, NodePtr parent, const uint8_t pb, const uint8_t cb) {
+    inline static NodePtr _growTypeSWith(MemoryPool_t *mem, TrieNodeS_t *cNode, NodePtr parent, const uint8_t pb, const uint8_t cb) {
         auto newNode = _newTrieNodeM(mem, parent).M;
         
         newNode->State = std::move(cNode->State);
         newNode->DtM.Size = TYPE_S_MAX+1;
 
         for (size_t cidx=0; cidx<TYPE_S_MAX; ++cidx) {
-            newNode->DtM.Children[cidx] = cNode->DtS.Children[cidx];
+            newNode->DtM.Children()[cidx] = cNode->DtS.Children()[cidx];
             newNode->DtM.ChildrenIndex[cidx] = cNode->DtS.ChildrenIndex[cidx];
         }
 
         auto childNode = _newTrieNode(mem, newNode);
         newNode->DtM.ChildrenIndex[TYPE_S_MAX] = cb;
-        newNode->DtM.Children[TYPE_S_MAX] = childNode;
+        newNode->DtM.Children()[TYPE_S_MAX] = childNode;
 
         switch(parent.S->Type) {
         case NodeType::S: 
@@ -278,7 +279,7 @@ namespace trie {
             auto sp = parent.S;
             for (size_t cidx=0; cidx<sp->DtS.Size; ++cidx) {
                 if (sp->DtS.ChildrenIndex[cidx] == pb) {
-                    sp->DtS.Children[cidx] = newNode;
+                    sp->DtS.Children()[cidx] = newNode;
                     break;
                 }
             }
@@ -289,7 +290,7 @@ namespace trie {
             auto sp = parent.M;
             for (size_t cidx=0; cidx<sp->DtM.Size; ++cidx) {
                 if (sp->DtM.ChildrenIndex[cidx] == pb) {
-                    sp->DtM.Children[cidx] = newNode;
+                    sp->DtM.Children()[cidx] = newNode;
                     break;
                 }
             }
@@ -303,12 +304,12 @@ namespace trie {
         }
         return childNode;
     }
-    inline static NodePtr _growTypeMWith(MemoryPool_t *mem, const TrieNodeM_t *cNode, NodePtr parent, const uint8_t pb, const uint8_t cb) {
+    inline static NodePtr _growTypeMWith(MemoryPool_t *mem, TrieNodeM_t *cNode, NodePtr parent, const uint8_t pb, const uint8_t cb) {
         auto newNode = _newTrieNodeL(mem, parent).L;
         
         newNode->State = std::move(cNode->State);
         for (size_t cidx=0; cidx<TYPE_M_MAX; ++cidx) {
-            newNode->DtL.Children[cNode->DtM.ChildrenIndex[cidx]] = cNode->DtM.Children[cidx];
+            newNode->DtL.Children[cNode->DtM.ChildrenIndex[cidx]] = cNode->DtM.Children()[cidx];
         }
         auto childNode = _newTrieNode(mem, newNode);
         newNode->DtL.Children[cb] = childNode;
@@ -320,7 +321,7 @@ namespace trie {
             auto sp = parent.S;
             for (size_t cidx=0; cidx<sp->DtS.Size; ++cidx) {
                 if (sp->DtS.ChildrenIndex[cidx] == pb) {
-                    sp->DtS.Children[cidx] = newNode;
+                    sp->DtS.Children()[cidx] = newNode;
                     break;
                 }
             }
@@ -331,7 +332,7 @@ namespace trie {
             auto sp = parent.M;
             for (size_t cidx=0; cidx<sp->DtM.Size; ++cidx) {
                 if (sp->DtM.ChildrenIndex[cidx] == pb) {
-                    sp->DtM.Children[cidx] = newNode;
+                    sp->DtM.Children()[cidx] = newNode;
                     break;
                 }
             }
@@ -370,14 +371,14 @@ namespace trie {
                                 if (csz == TYPE_S_MAX) {
                                     cNode = _growTypeSWith(mem, sNode, parent, bs[bidx-1], cb);
                                 } else {
-                                    sNode->DtS.Children[sNode->DtS.Size++] = _newTrieNode(mem, cNode, bidx);
+                                    sNode->DtS.Children()[sNode->DtS.Size++] = _newTrieNode(mem, cNode, bidx);
                                     childrenIndex[csz] = cb;
-                                    cNode = sNode->DtS.Children[csz];
+                                    cNode = sNode->DtS.Children()[csz];
                                 }
                                 break;
                             }
                             if (childrenIndex[cidx] == cb) {
-                                cNode = sNode->DtS.Children[cidx];
+                                cNode = sNode->DtS.Children()[cidx];
                                 break;
                             }
                             cidx++;
@@ -416,12 +417,12 @@ namespace trie {
                             if (csz == TYPE_M_MAX) {
                                 cNode = _growTypeMWith(mem, mNode, parent, bs[bidx-1], cb);
                             } else {
-                                mNode->DtM.Children[mNode->DtM.Size++] = _newTrieNode(mem, mNode, bidx);
+                                mNode->DtM.Children()[mNode->DtM.Size++] = _newTrieNode(mem, mNode, bidx);
                                 mNode->DtM.ChildrenIndex[csz] = cb;
-                                cNode = mNode->DtM.Children[csz];
+                                cNode = mNode->DtM.Children()[csz];
                             }
                         } else {
-                            cNode = mNode->DtM.Children[__builtin_ctz(bitfield)];
+                            cNode = mNode->DtM.Children()[__builtin_ctz(bitfield)];
                         }
 
                         break;
@@ -474,7 +475,7 @@ namespace trie {
                         for (;;) {
                             if (cidx >= csz) { return nullptr; }
                             if (childrenIndex[cidx] == cb) {
-                                cNode = sNode->DtS.Children[cidx];
+                                cNode = sNode->DtS.Children()[cidx];
                                 break;
                             }
                             cidx++;
@@ -514,7 +515,7 @@ namespace trie {
                         }
 #endif
 
-                        cNode = mNode->DtM.Children[__builtin_ctz(bitfield)];
+                        cNode = mNode->DtM.Children()[__builtin_ctz(bitfield)];
                         break;    
                     }
                 case NodeType::L:
@@ -619,7 +620,7 @@ namespace trie {
                         for (;;) {
                             if (cidx >= csz) { return std::move(results); }
                             if (childrenIndex[cidx] == cb) {
-                                cNode = sNode->DtS.Children[cidx];
+                                cNode = sNode->DtS.Children()[cidx];
                                 break;
                             }
                             cidx++;
@@ -638,7 +639,7 @@ namespace trie {
                         if (!bitfield) {
                             return std::move(results);
                         }
-                        cNode = mNode->DtM.Children[__builtin_ctz(bitfield)];
+                        cNode = mNode->DtM.Children()[__builtin_ctz(bitfield)];
                         break;
                     }
                 case NodeType::L:
@@ -686,7 +687,7 @@ namespace trie {
                     auto sNode = cNode.S;
                     const size_t csz = sNode->DtS.Size;
                     for (size_t cidx = 0; cidx<csz; cidx++) {
-                        _takeAnalytics(sNode->DtS.Children[cidx]);
+                        _takeAnalytics(sNode->DtS.Children()[cidx]);
                     }
                     break;
                 }
@@ -696,7 +697,7 @@ namespace trie {
                     auto mNode = cNode.M;
                     const size_t csz = mNode->DtM.Size;
                     for (size_t cidx = 0; cidx<csz; cidx++) {
-                        _takeAnalytics(mNode->DtM.Children[cidx]);
+                        _takeAnalytics(mNode->DtM.Children()[cidx]);
                     }
                     break;
                 }
