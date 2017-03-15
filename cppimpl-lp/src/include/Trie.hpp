@@ -124,14 +124,12 @@ namespace trie {
 
     struct TrieNodeS_t {
         const NodeType Type = NodeType::S;
-        NodePtr _Parent; // TODO check if removing the parent has any effect. We can use the previous iteration cNode to determine it
         RecordHistory State;
 
         DataS<TYPE_S_MAX> DtS;    
     };
     struct TrieNodeM_t {
         const NodeType Type = NodeType::M;
-        NodePtr _Parent;
         RecordHistory State;
         // 40 bytes so far. To be 16-bit aligned for SIMD we need to pad some bytes
         uint8_t padding[8];
@@ -140,7 +138,6 @@ namespace trie {
     } ALIGNED_16;
     struct TrieNodeL_t {
         const NodeType Type = NodeType::L;
-        NodePtr _Parent;
         RecordHistory State;
 
         struct DataL {
@@ -149,7 +146,6 @@ namespace trie {
     };
     struct TrieNodeX_t {
         const NodeType Type = NodeType::X;
-        NodePtr _Parent;
         RecordHistory State; 
         
         // TODO Optimization
@@ -231,23 +227,19 @@ namespace trie {
     
     static inline NodePtr _newTrieNodeS(MemoryPool_t*mem, NodePtr p) {
         TrieNodeS_t *node = mem->_newNodeS();
-        node->_Parent = p;
         return node;
     }
     static inline NodePtr _newTrieNodeM(MemoryPool_t*mem, NodePtr p) {
         TrieNodeM_t *node = mem->_newNodeM();
-        node->_Parent = p;
         return node;
     }
     static inline NodePtr _newTrieNodeL(MemoryPool_t*mem, NodePtr p) {
         TrieNodeL_t *node = mem->_newNodeL();
-        node->_Parent = p;
         std::memset(node->DtL.Children, 0, TYPE_L_MAX * sizeof(NodePtr*));
         return node;
     }
     static inline NodePtr _newTrieNodeX(MemoryPool_t*mem, NodePtr p) {
         TrieNodeX_t *node = mem->_newNodeX();
-        node->_Parent = p;
         return node;
     }
     static inline NodePtr _newTrieNode(MemoryPool_t*mem, NodePtr p, size_t depth = 0) {
@@ -265,16 +257,14 @@ namespace trie {
     ////////////////////////////
 
 
-    inline static NodePtr _growTypeSWith(MemoryPool_t *mem, const TrieNodeS_t *cNode, const uint8_t pb, const uint8_t cb) {
-        auto parent = cNode->_Parent;
-        auto newNode = _newTrieNodeM(mem, cNode->_Parent).M;
+    inline static NodePtr _growTypeSWith(MemoryPool_t *mem, const TrieNodeS_t *cNode, NodePtr parent, const uint8_t pb, const uint8_t cb) {
+        auto newNode = _newTrieNodeM(mem, parent).M;
         
         newNode->State = std::move(cNode->State);
         newNode->DtM.Size = TYPE_S_MAX+1;
 
         for (size_t cidx=0; cidx<TYPE_S_MAX; ++cidx) {
             newNode->DtM.Children[cidx] = cNode->DtS.Children[cidx];
-            newNode->DtM.Children[cidx].S->_Parent = newNode;
             newNode->DtM.ChildrenIndex[cidx] = cNode->DtS.ChildrenIndex[cidx];
         }
 
@@ -313,13 +303,11 @@ namespace trie {
         }
         return childNode;
     }
-    inline static NodePtr _growTypeMWith(MemoryPool_t *mem, const TrieNodeM_t *cNode, const uint8_t pb, const uint8_t cb) {
-        auto parent = cNode->_Parent;
-        auto newNode = _newTrieNodeL(mem, cNode->_Parent).L;
+    inline static NodePtr _growTypeMWith(MemoryPool_t *mem, const TrieNodeM_t *cNode, NodePtr parent, const uint8_t pb, const uint8_t cb) {
+        auto newNode = _newTrieNodeL(mem, parent).L;
         
         newNode->State = std::move(cNode->State);
         for (size_t cidx=0; cidx<TYPE_M_MAX; ++cidx) {
-            cNode->DtM.Children[cidx].M->_Parent = newNode;
             newNode->DtL.Children[cNode->DtM.ChildrenIndex[cidx]] = cNode->DtM.Children[cidx];
         }
         auto childNode = _newTrieNode(mem, newNode);
@@ -363,9 +351,12 @@ namespace trie {
     static NodePtr AddString(MemoryPool_t *mem, NodePtr cNode, const std::string& s) {
         const size_t bsz = s.size();
         const uint8_t* bs = reinterpret_cast<const uint8_t*>(s.data());
-
+        NodePtr parent = (TrieNodeS_t*)nullptr;
+        NodePtr previous = (TrieNodeS_t*)nullptr;
         for (size_t bidx = 0; bidx < bsz; bidx++) {
             const uint8_t cb = bs[bidx];
+
+            previous = cNode;
 
             switch(cNode.L->Type) {
                 case NodeType::S:
@@ -377,7 +368,7 @@ namespace trie {
                         for (;;) {
                             if (cidx >= csz) {
                                 if (csz == TYPE_S_MAX) {
-                                    cNode = _growTypeSWith(mem, sNode, bs[bidx-1], cb);
+                                    cNode = _growTypeSWith(mem, sNode, parent, bs[bidx-1], cb);
                                 } else {
                                     sNode->DtS.Children[sNode->DtS.Size++] = _newTrieNode(mem, cNode, bidx);
                                     childrenIndex[csz] = cb;
@@ -423,7 +414,7 @@ namespace trie {
 
                         if (!bitfield) {
                             if (csz == TYPE_M_MAX) {
-                                cNode = _growTypeMWith(mem, mNode, bs[bidx-1], cb);
+                                cNode = _growTypeMWith(mem, mNode, parent, bs[bidx-1], cb);
                             } else {
                                 mNode->DtM.Children[mNode->DtM.Size++] = _newTrieNode(mem, mNode, bidx);
                                 mNode->DtM.ChildrenIndex[csz] = cb;
@@ -458,6 +449,8 @@ namespace trie {
                 default:
                     abort();
             }
+        
+            parent = previous;
         }
 
         return cNode;
@@ -739,7 +732,7 @@ namespace trie {
         MemoryPool_t MemoryPool;
 
         TrieRoot_t() {
-            std::cerr << sizeof(TrieNodeS_t) << "::" << sizeof(TrieNodeM_t) <<  "::" << sizeof(TrieNodeL_t) <<  "::" << sizeof(TrieNodeX_t) << "::" << sizeof(RecordHistory) << "::" << sizeof(NodePtr) << std::endl;
+            std::cerr << sizeof(TrieNodeS_t) << "::" << sizeof(TrieNodeM_t) <<  "::" << sizeof(TrieNodeL_t) <<  "::" << sizeof(TrieNodeX_t) << "::" << sizeof(DataS<2>) << "::" << sizeof(DataS<16>) << "::" << sizeof(RecordHistory) << "::" << sizeof(NodePtr) << std::endl;
             
             std::cerr << "S" << TYPE_S_MAX << " L" << TYPE_L_MAX << " X" << TYPE_X_DEPTH;
             std::cerr << " MEM_S" << MEMORY_POOL_BLOCK_SIZE_S;
