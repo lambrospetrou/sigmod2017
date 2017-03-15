@@ -44,7 +44,7 @@ namespace trie {
     constexpr size_t TYPE_L_MAX = 256;
     constexpr size_t TYPE_X_DEPTH = 24;
 
-    constexpr size_t MEMORY_POOL_BLOCK_SIZE_S = 1<<24;
+    constexpr size_t MEMORY_POOL_BLOCK_SIZE_S = 1<<25;
     constexpr size_t MEMORY_POOL_BLOCK_SIZE_M = 1<<10;
     constexpr size_t MEMORY_POOL_BLOCK_SIZE_L = 1<<10;
     constexpr size_t MEMORY_POOL_BLOCK_SIZE_X = 1<<10;
@@ -119,7 +119,7 @@ namespace trie {
     template<size_t SIZE> 
         struct DataS {
             uint8_t ChildrenIndex[sizeof(uint8_t) * SIZE + sizeof(NodePtr*)*SIZE];
-            size_t Size;
+            uint8_t Size;
 
             DataS() : Size(0) {}
             
