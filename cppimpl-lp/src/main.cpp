@@ -194,6 +194,7 @@ void processUpdatesBatch(NgramDB *ngdb, WorkersContext *wctx, const std::vector<
 }
 
 uint64_t timeReading = 0;
+uint64_t tA{0}, tD{0}, tQ{0};
 bool readNextBatch(istream& in, NgramDB *ngdb, vector<OpQuery>& opQs, vector<OpUpdate>& opUs, vector<Op_t>& Q, int& opIdx) {
     auto start = timer.getChrono();
     std::string line;
@@ -206,28 +207,29 @@ bool readNextBatch(istream& in, NgramDB *ngdb, vector<OpQuery>& opQs, vector<OpU
         }
         opIdx++;
 
+        auto startSingle = timer.getChrono();
         char type = line[0];
-        switch (type) {
-            case 'D':
-                //opUs.emplace_back(line.substr(2), opIdx, OpType_t::DEL);
-                Q.emplace_back(line.substr(2), opIdx, OpType_t::DEL);
-                //ngdb->RemoveNgram(line.substr(2), opIdx);
-                //tD += timer.getChrono(startSingle);
-                break;
+        switch (type) { 
             case 'A':
                 //opUs.emplace_back(line.substr(2), opIdx, OpType_t::ADD);
-                Q.emplace_back(line.substr(2), opIdx, OpType_t::ADD);
-                //ngdb->AddNgram(line.substr(2), opIdx);
-                //tA += timer.getChrono(startSingle);
+                //Q.emplace_back(line.substr(2), opIdx, OpType_t::ADD);
+                ngdb->AddNgram(line.substr(2), opIdx);
+                tA += timer.getChrono(startSingle);
+                break;
+            case 'D':
+                //opUs.emplace_back(line.substr(2), opIdx, OpType_t::DEL);
+                //Q.emplace_back(line.substr(2), opIdx, OpType_t::DEL);
+                ngdb->RemoveNgram(line.substr(2), opIdx);
+                tD += timer.getChrono(startSingle);
                 break;
             case 'Q':
                 //opQs.emplace_back(line.substr(2), opIdx);
-                Q.emplace_back(line.substr(2), opIdx, OpType_t::Q);
-                //queryEvaluation(ngdb, std::move(OpQuery{line.substr(2), opIdx}));
-                //tQ += timer.getChrono(startSingle);
+                //Q.emplace_back(line.substr(2), opIdx, OpType_t::Q);
+                queryEvaluation(ngdb, std::move(OpQuery{line.substr(2), opIdx}));
+                tQ += timer.getChrono(startSingle);
                 break;
             case 'F':
-                timeReading += timer.getChrono(start);
+                //timeReading += timer.getChrono(start);
                 return false;
                 break;
         }
@@ -237,7 +239,6 @@ bool readNextBatch(istream& in, NgramDB *ngdb, vector<OpQuery>& opQs, vector<OpU
     abort();
 }
 
-uint64_t tA{0}, tD{0}, tQ{0};
 void queryBatchEvaluationSingle(NgramDB *ngdb, WorkersContext *wctx, const std::vector<Op_t>& Q, const std::vector<OpQuery>& opQs) {
     /*
     const size_t qsz = opQs.size();

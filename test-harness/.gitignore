@@ -1,3 +1,10 @@
 *.init
 *.work
 *.result
+
+*.full
+*.fullx
+*.uniq
+*.work-updates-only
+*.workx
+
