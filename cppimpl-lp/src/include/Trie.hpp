@@ -28,7 +28,7 @@
 
 #include <emmintrin.h>
 
-#define USE_TYPE_X
+//#define USE_TYPE_X
 
 namespace cy {
 namespace trie {
@@ -42,10 +42,10 @@ namespace trie {
     constexpr size_t TYPE_S_MAX = 2;
     constexpr size_t TYPE_M_MAX = 16;
     constexpr size_t TYPE_L_MAX = 256;
-    constexpr size_t TYPE_X_DEPTH = 25;
-    
-    constexpr size_t MEMORY_POOL_BLOCK_SIZE_S = 1<<20;
-    constexpr size_t MEMORY_POOL_BLOCK_SIZE_M = 1<<15;
+    constexpr size_t TYPE_X_DEPTH = 24;
+
+    constexpr size_t MEMORY_POOL_BLOCK_SIZE_S = 1<<24;
+    constexpr size_t MEMORY_POOL_BLOCK_SIZE_M = 1<<10;
     constexpr size_t MEMORY_POOL_BLOCK_SIZE_L = 1<<10;
     constexpr size_t MEMORY_POOL_BLOCK_SIZE_X = 1<<10;
 
@@ -233,31 +233,28 @@ namespace trie {
         size_t allocatedX; // nodes given from the latest block
     };
     
-    static inline NodePtr _newTrieNodeS(MemoryPool_t*mem, NodePtr p) {
-        TrieNodeS_t *node = mem->_newNodeS();
-        return node;
+    static inline NodePtr _newTrieNodeS(MemoryPool_t*mem) {
+        return mem->_newNodeS();
     }
-    static inline NodePtr _newTrieNodeM(MemoryPool_t*mem, NodePtr p) {
-        TrieNodeM_t *node = mem->_newNodeM();
-        return node;
+    static inline NodePtr _newTrieNodeM(MemoryPool_t*mem) {
+        return mem->_newNodeM();
     }
-    static inline NodePtr _newTrieNodeL(MemoryPool_t*mem, NodePtr p) {
+    static inline NodePtr _newTrieNodeL(MemoryPool_t*mem) {
         TrieNodeL_t *node = mem->_newNodeL();
         std::memset(node->DtL.Children, 0, TYPE_L_MAX * sizeof(NodePtr*));
         return node;
     }
-    static inline NodePtr _newTrieNodeX(MemoryPool_t*mem, NodePtr p) {
-        TrieNodeX_t *node = mem->_newNodeX();
-        return node;
+    static inline NodePtr _newTrieNodeX(MemoryPool_t*mem) {
+        return mem->_newNodeX();
     }
-    static inline NodePtr _newTrieNode(MemoryPool_t*mem, NodePtr p, size_t depth = 0) {
+    static inline NodePtr _newTrieNode(MemoryPool_t*mem, size_t depth = 0) {
 #ifdef USE_TYPE_X
         if (depth < TYPE_X_DEPTH) {
-            return _newTrieNodeS(mem, p);
+            return _newTrieNodeS(mem);
         }
-        return _newTrieNodeX(mem, p);
+        return _newTrieNodeX(mem);
 #else
-        return _newTrieNodeS(mem, p);
+        return _newTrieNodeS(mem);
 #endif
     }
 
@@ -266,7 +263,7 @@ namespace trie {
 
 
     inline static NodePtr _growTypeSWith(MemoryPool_t *mem, TrieNodeS_t *cNode, NodePtr parent, const uint8_t pb, const uint8_t cb) {
-        auto newNode = _newTrieNodeM(mem, parent).M;
+        auto newNode = _newTrieNodeM(mem).M;
         
         newNode->State = std::move(cNode->State);
         newNode->DtM.Size = TYPE_S_MAX+1;
@@ -276,7 +273,7 @@ namespace trie {
             newNode->DtM.ChildrenIndex[cidx] = cNode->DtS.ChildrenIndex[cidx];
         }
 
-        auto childNode = _newTrieNode(mem, newNode);
+        auto childNode = _newTrieNode(mem);
         newNode->DtM.ChildrenIndex[TYPE_S_MAX] = cb;
         newNode->DtM.Children()[TYPE_S_MAX] = childNode;
 
@@ -312,13 +309,13 @@ namespace trie {
         return childNode;
     }
     inline static NodePtr _growTypeMWith(MemoryPool_t *mem, TrieNodeM_t *cNode, NodePtr parent, const uint8_t pb, const uint8_t cb) {
-        auto newNode = _newTrieNodeL(mem, parent).L;
+        auto newNode = _newTrieNodeL(mem).L;
         
         newNode->State = std::move(cNode->State);
         for (size_t cidx=0; cidx<TYPE_M_MAX; ++cidx) {
             newNode->DtL.Children[cNode->DtM.ChildrenIndex[cidx]] = cNode->DtM.Children()[cidx];
         }
-        auto childNode = _newTrieNode(mem, newNode);
+        auto childNode = _newTrieNode(mem);
         newNode->DtL.Children[cb] = childNode;
 
         // Update the parent
@@ -378,7 +375,7 @@ namespace trie {
                                 if (csz == TYPE_S_MAX) {
                                     cNode = _growTypeSWith(mem, sNode, parent, bs[bidx-1], cb);
                                 } else {
-                                    sNode->DtS.Children()[sNode->DtS.Size++] = _newTrieNode(mem, cNode, bidx);
+                                    sNode->DtS.Children()[sNode->DtS.Size++] = _newTrieNode(mem, bidx);
                                     childrenIndex[csz] = cb;
                                     cNode = sNode->DtS.Children()[csz];
                                 }
@@ -424,7 +421,7 @@ namespace trie {
                             if (csz == TYPE_M_MAX) {
                                 cNode = _growTypeMWith(mem, mNode, parent, bs[bidx-1], cb);
                             } else {
-                                mNode->DtM.Children()[mNode->DtM.Size++] = _newTrieNode(mem, mNode, bidx);
+                                mNode->DtM.Children()[mNode->DtM.Size++] = _newTrieNode(mem, bidx);
                                 mNode->DtM.ChildrenIndex[csz] = cb;
                                 cNode = mNode->DtM.Children()[csz];
                             }
@@ -437,7 +434,7 @@ namespace trie {
                 case NodeType::L:
                     {
                         if (!cNode.L->DtL.Children[cb]) {
-                            cNode.L->DtL.Children[cb] = _newTrieNode(mem, cNode, bidx);
+                            cNode.L->DtL.Children[cb] = _newTrieNode(mem, bidx);
                         }
                         cNode = cNode.L->DtL.Children[cb];
                         break;
@@ -448,7 +445,7 @@ namespace trie {
                         const std::string key(s.substr(bidx));
                         auto it = xNode->ChildrenMap.find(key);
                         if (it == xNode->ChildrenMap.end()) {
-                            it = xNode->ChildrenMap.insert(it, {std::move(key), _newTrieNode(mem, cNode)});
+                            it = xNode->ChildrenMap.insert(it, {std::move(key), _newTrieNode(mem)});
                         }
                         cNode = it->second; bidx = bsz;
                         break;
@@ -749,7 +746,7 @@ namespace trie {
             std::cerr << " MEM_X" << MEMORY_POOL_BLOCK_SIZE_X;
             std::cerr << std::endl;
 
-            Root = _newTrieNodeL(&MemoryPool, nullptr);
+            Root = _newTrieNodeL(&MemoryPool);
             if (!Root) { abort(); }
         }
         ~TrieRoot_t() {
