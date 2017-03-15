@@ -19,8 +19,8 @@
 
 #include <omp.h>
 
-#define USE_OPENMP
-#define USE_PARALLEL
+//#define USE_OPENMP
+//#define USE_PARALLEL
 
 cy::Timer_t timer;
 
@@ -176,111 +176,6 @@ inline void queryEvaluation(NgramDB *ngdb, const OpQuery& op) {
     outputResults(std::cout, std::move(queryEvaluationWithResults(ngdb, op)));
 }
 
-uint64_t timeFindAll = 0;
-void queryEvaluationInterleaved(NgramDB *ngdb, const OpQuery& op, std::vector<std::vector<Result_t>>& gResult) {
-    const size_t pidx = omp_get_thread_num();
-    const size_t nthreads = omp_get_num_threads();
-
-    const auto& doc = op.Doc;
-    const size_t opIdx = op.OpIdx;
-    size_t start{0}, end{0}, sz{doc.size()};
-
-    size_t startIdxEnd = sz;
-
-    std::vector<std::pair<size_t, std::vector<Result_t>>> local; local.reserve(doc.size()/32);
-
-    size_t wordidx = 0;
-    for (; start < sz; ) {
-		// find start of word
-		for (start = end; start < startIdxEnd && doc[start] == ' '; ++start) {}
-        if (start >= startIdxEnd) { break; }
-
-        if ((uint8_t(doc[start]) % nthreads) == pidx) {
-            //#pragma omp critical
-            //std::cerr << pidx << ":" << wordidx << std::endl;
-        
-            //gResult[wordidx] = std::move(ngdb->FindNgrams(doc, start, opIdx));
-            auto tS = timer.getChrono();
-            auto r = std::move(ngdb->FindNgrams(doc, start, opIdx));
-            timeFindAll += timer.getChrono(tS);
-            if (!r.empty()) {
-                local.emplace_back(wordidx, std::move(r));
-            }
-        }
-        
-        wordidx++;
-        for (end = start; end < sz && doc[end] != ' '; ++end) {}
-    }
-
-    #pragma omp critical
-    {
-        for (const auto& ri : local) { gResult[ri.first] = std::move(ri.second); }
-    }
-}
-uint64_t serialTime = 0;
-void queryBatchEvaluation(NgramDB *ngdb, WorkersContext *wctx, const std::vector<OpQuery> *opQs, std::vector<std::vector<std::vector<Result_t>>> *gResults, std::vector<size_t> *gResultsFinished) {
-    const size_t qsz = opQs->size(); //std::cerr << qsz << "_";
-    
-    const size_t nthreads = omp_get_num_threads();
-    const size_t pidx = omp_get_thread_num();
-    //#pragma omp critical
-    //std::cerr << pidx << "::" << nthreads << "::" << qsz << std::endl;
-    
-    uint64_t localTime;
-    
-    // prepare the results array - THERE IS IMPLICIT BARRIER
-    #pragma omp single
-    {
-        localTime = timer.getChrono();
-        
-        gResultsFinished->resize(qsz);
-        std::memset(gResultsFinished->data(), 0, qsz*sizeof(size_t));
-        
-        gResults->resize(0);
-        gResults->resize(qsz);
-
-        for (size_t qidx=0; qidx<qsz; qidx++) {
-            const auto& doc = (*opQs)[qidx].Doc;
-            const size_t numWordsApprox = std::count(doc.data(), doc.data()+doc.size(), ' ') + 1;
-            //const size_t numWordsApprox = lp::utils::count((uint8_t*)doc.data(), doc.size(), ' ') + 1;
-            //std::cerr << pidx << "::" << qidx << "::words:" << numWordsApprox << "_" << doc.size() << std::endl;
-            (*gResults)[qidx].resize(numWordsApprox);
-        }
-        
-        serialTime += timer.getChrono(localTime);
-    }
-
-    size_t qidx = 0;
-    for(;;) { 
-
-        //#pragma omp critical
-        //{ std::cerr << pidx <<  "::" << qidx << std::endl; }
-
-        queryEvaluationInterleaved(ngdb, (*opQs)[qidx], (*gResults)[qidx]);
-        
-        bool iam = false;
-        #pragma omp critical
-        { iam = (++((*gResultsFinished)[qidx]) == nthreads); }
-
-        // print the results
-        if (iam) {
-            localTime = timer.getChrono();
-
-            std::vector<Result_t> cresult; cresult.reserve((*opQs)[qidx].Doc.size()/10);
-            for (const auto& wr : (*gResults)[qidx]) {
-                if (!wr.empty()) {
-                    cresult.insert(cresult.end(), wr.begin(), wr.end());
-                }
-            }
-            outputResults(std::cout, std::move(cresult));
-
-            serialTime += timer.getChrono(localTime);
-        }
-        
-        if (++qidx >= qsz) { return; }
-    }
-}
-
 void processUpdatesBatch(NgramDB *ngdb, WorkersContext *wctx, const std::vector<OpUpdate> *opUs) {
     (void)wctx;
     const size_t opsz = opUs->size();
@@ -342,61 +237,13 @@ bool readNextBatch(istream& in, NgramDB *ngdb, vector<OpQuery>& opQs, vector<OpU
     abort();
 }
 
-void processWorkload(istream& in, NgramDB *ngdb, WorkersContext *wctx, int opIdx) {
-    auto start = timer.getChrono();
-
-    uint64_t tA{0}, tD{0}, tQ{0};
-
-    std::vector<std::vector<std::vector<Result_t>>> gResults;
-    std::vector<size_t> gResultsFinished;
-    
-    vector<OpQuery> opQs; opQs.reserve(256);
-    vector<OpUpdate> opUs; opUs.reserve(256);
-    vector<Op_t> Q; Q.reserve(256);
-    std::string line;
-
-    bool exit = false;
-    uint64_t timerStart;
-
-#pragma omp parallel shared(ngdb, wctx, exit, Q, opUs, opQs, gResults, tA, tD, tQ)
-{
-    //@worker - loop
-	for (;;) {
-        
-        #pragma omp master
-        {
-            exit = readNextBatch(in, ngdb, opQs, opUs, Q, opIdx);
-	        //std::cerr << opUs.size() << "::" << opQs.size() << "_";
-        }
-        #pragma omp barrier
-
-        if (exit) { break; }
-
-        if (opQs.empty()) { continue; }
-
-        #pragma omp master
-        { 
-            auto tU = timer.getChrono();
-            processUpdatesBatch(ngdb, wctx, &opUs); 
-            tA += timer.getChrono(tU);
-        }
-        #pragma omp barrier
-
-        #pragma omp master
-        { timerStart = timer.getChrono(); }
-
-        // @parallel
-        if (!opQs.empty()) {
-            queryBatchEvaluation(ngdb, wctx, &opQs, &gResults, &gResultsFinished);
-        }
-        #pragma omp barrier
-
-        #pragma omp master
-        { 
-            opUs.resize(0); opQs.resize(0);
-            tQ += timer.getChrono(timerStart);
-        }
-        /*
+void queryBatchEvaluationSingle(NgramDB *ngdb, WorkersContext *wctx, const std::vector<OpQuery>& opQs) {
+    const size_t qsz = opQs.size();
+    for (size_t qidx=0; qidx<qsz; ++qidx) {
+        const auto& cop = opQs[qidx];
+        queryEvaluation(ngdb, std::move(OpQuery{cop.Doc, cop.OpIdx}));
+    }
+/*
         const size_t opsz = Q.size();
         for (size_t opidx=0; opidx<opsz; ++opidx) {
             auto startSingle = timer.getChrono();
@@ -417,13 +264,40 @@ void processWorkload(istream& in, NgramDB *ngdb, WorkersContext *wctx, int opIdx
             }
         }// processed all operations
         */
+}
+
+void processWorkloadSingle(istream& in, NgramDB *ngdb, WorkersContext *wctx, int opIdx) {
+    auto start = timer.getChrono();
+
+    uint64_t tA{0}, tD{0}, tQ{0};
+
+    vector<OpQuery> opQs; opQs.reserve(256);
+    vector<OpUpdate> opUs; opUs.reserve(256);
+    vector<Op_t> Q; Q.reserve(256);
+    std::string line;
+
+    //@worker - loop
+	for (;;) {
+
+        if (readNextBatch(in, ngdb, opQs, opUs, Q, opIdx)) {
+            break;
+        }
+        if (opQs.empty()) { continue; }
+
+        auto tAs = timer.getChrono();
+        processUpdatesBatch(ngdb, wctx, &opUs); 
+        tA += timer.getChrono(tAs);
+
+        auto tQs = timer.getChrono();
+        if (!opQs.empty()) {
+            queryBatchEvaluationSingle(ngdb, wctx, opQs);
+        }
+        opUs.resize(0); opQs.resize(0); Q.resize(0);
+        tQ += timer.getChrono(tQs);
 
     }// end of outermost loop - exit program
-}
 	std::cerr << "proc::" << timer.getChrono(start) << ":" << tA << ":" << tD << ":" << tQ << " reads:" << timeReading << std::endl;
-	std::cerr << "proc:: q" << tQ << " serialpart:" << serialTime << " findAll:" << timeFindAll << std::endl;
 }
-
 std::unique_ptr<NgramDB> readInitial(std::istream& in, int *outOpIdx) {
     auto start = timer.getChrono();
 	
@@ -474,8 +348,9 @@ int main(int argc, char**argv) {
 
     WorkersContext wctx;
     wctx.NumThreads = threads;
-    processWorkload(std::cin, ngdb.get(), &wctx, opIdx);
-	
+   
+    processWorkloadSingle(std::cin, ngdb.get(), &wctx, opIdx);
+    
     std::cerr << "main::" << timer.getChrono(start) << std::endl;
 }
 

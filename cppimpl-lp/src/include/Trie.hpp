@@ -403,7 +403,9 @@ namespace trie {
                         auto mask=(1<<csz)-1;
                         auto bitfield=_mm_movemask_epi8(cmp)&mask;
                          
-#ifdef DEBUG
+#ifdef LPDEBUG
+                        std::cerr << (void*)mNode << ":" << is_aligned(mNode, 16) << std::endl;
+                        
                         auto& childrenIndex = mNode->DtM.ChildrenIndex;
                         size_t tcidx = 0;
                         for (tcidx = 0; tcidx<csz; tcidx++) {
@@ -501,7 +503,7 @@ namespace trie {
                             return nullptr;
                         }
                         
-#ifdef DEBUG
+#ifdef LPDEBUG
                         auto childrenIndex = mNode->DtM.ChildrenIndex;
                         size_t cidx = 0;
                         for (cidx = 0; cidx<csz; cidx++) {
@@ -756,27 +758,25 @@ namespace trie {
         }
     };
     
-        NodePtr AddNgram(TrieRoot_t *trie, const std::string& s, int opIdx) {
-            //std::cerr << "a::" << s << std::endl;
-	        auto cNode = cy::trie::AddString(&trie->MemoryPool, trie->Root, s);
-	        cNode.L->State.MarkAdd(opIdx);
-#ifdef DEBUG
-            if (cNode != cy::trie::FindString(trie->Root, s)) {
-                std::cerr << "add or find is wrong!" << std::endl;
-                abort();
-            }
+    inline static void AddNgram(TrieRoot_t *trie, const std::string& s, int opIdx) {
+        //std::cerr << "a::" << s << std::endl;
+        auto cNode = cy::trie::AddString(&trie->MemoryPool, trie->Root, s);
+        cNode.L->State.MarkAdd(opIdx);
+#ifdef LPDEBUG
+        if (cNode != cy::trie::FindString(trie->Root, s)) {
+            std::cerr << "add or find is wrong!" << std::endl;
+            abort();
+        }
 #endif
-            return cNode;
+    }
+
+    inline static void RemoveNgram(TrieRoot_t*trie, const std::string& s, int opIdx) {
+        //std::cerr << "rem::" << s << std::endl;
+        auto cNode = cy::trie::FindString(trie->Root, s);
+        if (cNode) {
+            cNode.L->State.MarkDel(opIdx);
         }
-    
-        NodePtr RemoveNgram(TrieRoot_t*trie, const std::string& s, int opIdx) {
-            //std::cerr << "rem::" << s << std::endl;
-	        auto cNode = cy::trie::FindString(trie->Root, s);
-	        if (cNode) {
-		        cNode.L->State.MarkDel(opIdx);
-	        }
-            return cNode;
-        }
+    }
 
 };
 };
