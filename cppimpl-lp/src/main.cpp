@@ -209,20 +209,20 @@ bool readNextBatch(istream& in, NgramDB *ngdb, vector<OpQuery>& opQs, vector<OpU
         char type = line[0];
         switch (type) {
             case 'D':
-                opUs.emplace_back(line.substr(2), opIdx, OpType_t::DEL);
-                //Q.emplace_back(line.substr(2), opIdx, OpType_t::DEL);
+                //opUs.emplace_back(line.substr(2), opIdx, OpType_t::DEL);
+                Q.emplace_back(line.substr(2), opIdx, OpType_t::DEL);
                 //ngdb->RemoveNgram(line.substr(2), opIdx);
                 //tD += timer.getChrono(startSingle);
                 break;
             case 'A':
-                opUs.emplace_back(line.substr(2), opIdx, OpType_t::ADD);
-                //Q.emplace_back(line.substr(2), opIdx, OpType_t::ADD);
+                //opUs.emplace_back(line.substr(2), opIdx, OpType_t::ADD);
+                Q.emplace_back(line.substr(2), opIdx, OpType_t::ADD);
                 //ngdb->AddNgram(line.substr(2), opIdx);
                 //tA += timer.getChrono(startSingle);
                 break;
             case 'Q':
-                opQs.emplace_back(line.substr(2), opIdx);
-                //Q.emplace_back(line.substr(2), opIdx, OpType_t::Q);
+                //opQs.emplace_back(line.substr(2), opIdx);
+                Q.emplace_back(line.substr(2), opIdx, OpType_t::Q);
                 //queryEvaluation(ngdb, std::move(OpQuery{line.substr(2), opIdx}));
                 //tQ += timer.getChrono(startSingle);
                 break;
@@ -237,13 +237,16 @@ bool readNextBatch(istream& in, NgramDB *ngdb, vector<OpQuery>& opQs, vector<OpU
     abort();
 }
 
-void queryBatchEvaluationSingle(NgramDB *ngdb, WorkersContext *wctx, const std::vector<OpQuery>& opQs) {
+uint64_t tA{0}, tD{0}, tQ{0};
+void queryBatchEvaluationSingle(NgramDB *ngdb, WorkersContext *wctx, const std::vector<Op_t>& Q, const std::vector<OpQuery>& opQs) {
+    /*
     const size_t qsz = opQs.size();
     for (size_t qidx=0; qidx<qsz; ++qidx) {
         const auto& cop = opQs[qidx];
         queryEvaluation(ngdb, std::move(OpQuery{cop.Doc, cop.OpIdx}));
     }
-/*
+    */
+
         const size_t opsz = Q.size();
         for (size_t opidx=0; opidx<opsz; ++opidx) {
             auto startSingle = timer.getChrono();
@@ -263,13 +266,9 @@ void queryBatchEvaluationSingle(NgramDB *ngdb, WorkersContext *wctx, const std::
                 break;
             }
         }// processed all operations
-        */
 }
-
 void processWorkloadSingle(istream& in, NgramDB *ngdb, WorkersContext *wctx, int opIdx) {
     auto start = timer.getChrono();
-
-    uint64_t tA{0}, tD{0}, tQ{0};
 
     vector<OpQuery> opQs; opQs.reserve(256);
     vector<OpUpdate> opUs; opUs.reserve(256);
@@ -282,6 +281,11 @@ void processWorkloadSingle(istream& in, NgramDB *ngdb, WorkersContext *wctx, int
         if (readNextBatch(in, ngdb, opQs, opUs, Q, opIdx)) {
             break;
         }
+        if (!Q.empty()) {
+            queryBatchEvaluationSingle(ngdb, wctx, Q, opQs);
+            Q.resize(0);
+        }
+        /*
         if (opQs.empty()) { continue; }
 
         auto tAs = timer.getChrono();
@@ -292,9 +296,9 @@ void processWorkloadSingle(istream& in, NgramDB *ngdb, WorkersContext *wctx, int
         if (!opQs.empty()) {
             queryBatchEvaluationSingle(ngdb, wctx, opQs);
         }
-        opUs.resize(0); opQs.resize(0); Q.resize(0);
+        opUs.resize(0); opQs.resize(0);
         tQ += timer.getChrono(tQs);
-
+        */
     }// end of outermost loop - exit program
 	std::cerr << "proc::" << timer.getChrono(start) << ":" << tA << ":" << tD << ":" << tQ << " reads:" << timeReading << std::endl;
 }

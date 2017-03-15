@@ -28,7 +28,7 @@
 
 #include <emmintrin.h>
 
-//#define USE_TYPE_X
+#define USE_TYPE_X
 
 namespace cy {
 namespace trie {
@@ -42,7 +42,7 @@ namespace trie {
     constexpr size_t TYPE_S_MAX = 2;
     constexpr size_t TYPE_M_MAX = 16;
     constexpr size_t TYPE_L_MAX = 256;
-    constexpr size_t TYPE_X_DEPTH = 30;
+    constexpr size_t TYPE_X_DEPTH = 25;
     
     constexpr size_t MEMORY_POOL_BLOCK_SIZE_S = 1<<20;
     constexpr size_t MEMORY_POOL_BLOCK_SIZE_M = 1<<15;
@@ -65,6 +65,7 @@ namespace trie {
     /////////////////////////////////////////
 
     struct RecordHistory {
+        /*
         struct Record_t {
             size_t OpIdx;
             OpType Type; // 0-Add, 1-Delete
@@ -90,6 +91,12 @@ namespace trie {
             }
             return false;
         }
+        */
+
+        OpType state{OpType::DEL};
+        inline void MarkAdd(size_t opIdx) { state = OpType::ADD; }
+        inline void MarkDel(size_t opIdx) { state = OpType::DEL; }
+        inline bool IsValid(size_t opIdx) const { return state == OpType::ADD; }
     };
 
     /////////////////////////////////////////
