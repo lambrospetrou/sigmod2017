@@ -132,13 +132,15 @@ namespace trie {
 
     struct TrieNodeS_t {
         const NodeType Type = NodeType::S;
-        RecordHistory State;
+        //RecordHistory State;
+        bool Valid;
 
         DataS<TYPE_S_MAX> DtS;    
     };
     struct TrieNodeM_t {
         const NodeType Type = NodeType::M;
-        RecordHistory State;
+        //RecordHistory State;
+        bool Valid;
         // 40 bytes so far. To be 16-bit aligned for SIMD we need to pad some bytes
         uint8_t padding[8];
 
@@ -146,7 +148,10 @@ namespace trie {
     } ALIGNED_16;
     struct TrieNodeL_t {
         const NodeType Type = NodeType::L;
-        RecordHistory State;
+        //RecordHistory State;
+
+        bool Valid;
+        std::string Suffix;
 
         struct DataL {
             NodePtr Children[256];
@@ -254,7 +259,7 @@ namespace trie {
         }
         return _newTrieNodeX(mem);
 #else
-        return _newTrieNodeS(mem);
+        return _newTrieNodeL(mem);
 #endif
     }
 
@@ -265,7 +270,8 @@ namespace trie {
     inline static NodePtr _growTypeSWith(MemoryPool_t *mem, TrieNodeS_t *cNode, NodePtr parent, const uint8_t pb, const uint8_t cb) {
         auto newNode = _newTrieNodeM(mem).M;
         
-        newNode->State = std::move(cNode->State);
+        //newNode->State = std::move(cNode->State);
+        newNode->Valid = cNode->Valid;
         newNode->DtM.Size = TYPE_S_MAX+1;
 
         for (size_t cidx=0; cidx<TYPE_S_MAX; ++cidx) {
@@ -311,7 +317,8 @@ namespace trie {
     inline static NodePtr _growTypeMWith(MemoryPool_t *mem, TrieNodeM_t *cNode, NodePtr parent, const uint8_t pb, const uint8_t cb) {
         auto newNode = _newTrieNodeL(mem).L;
         
-        newNode->State = std::move(cNode->State);
+        //newNode->State = std::move(cNode->State);
+        newNode->Valid = cNode->Valid;
         for (size_t cidx=0; cidx<TYPE_M_MAX; ++cidx) {
             newNode->DtL.Children[cNode->DtM.ChildrenIndex[cidx]] = cNode->DtM.Children()[cidx];
         }
@@ -352,6 +359,102 @@ namespace trie {
     }
 
 
+    static inline NodePtr _doAddStringL(MemoryPool_t *mem, TrieNodeL_t *cNode, const uint8_t*bs, const size_t bsz, const size_t bidx, bool *done) {
+        const uint8_t cb = bs[bidx];
+
+        std::cerr << "a";
+        
+        if (cNode->Suffix.empty()) { // NOT LEAF
+            std::cerr << "a1";
+            NodePtr nextNode = cNode->DtL.Children[cb];
+            if (!nextNode) {
+                std::cerr << "a2";
+                nextNode = _newTrieNode(mem, bidx);
+                if (bidx+1 < bsz) { // this is NOT the last byte so add the remaining as suffix
+                    nextNode.L->Suffix = std::move(std::string(bs+bidx+1, bs+bsz));
+                }
+                cNode->DtL.Children[cb] = nextNode;
+                *done = true;
+            }
+            std::cerr << "a3_";
+            return nextNode;
+        } 
+        
+        std::cerr << "a4";
+
+        // We are at a LEAF with suffix
+        const auto& suffix = cNode->Suffix;
+        const size_t sufsz = suffix.size();
+        const uint8_t *sufbs = reinterpret_cast<const uint8_t*>(cNode->Suffix.data());
+        size_t common = 0;
+        for (;common < bsz-bidx && common < sufsz && sufbs[common] == bs[bidx+common];) { ++common; }
+        
+        if (common == sufsz) { // the new ngram matched the whole existing suffix
+            std::cerr << "a5";
+            
+            if (common == bsz-bidx) { // we are already at the proper node - don't do anything
+                *done = true;
+                return cNode;
+            }
+            // there is some part of the new ngram to be added so we need to create the nodes
+            // to cover the common bytes and then we will add as suffix the remaining part of the new ngram
+            NodePtr nextNode = cNode;
+            for (size_t sidx=0; sidx<common; ++sidx) {
+                nextNode.L->DtL.Children[sufbs[common]] = _newTrieNode(mem, bidx);
+                nextNode = nextNode.L->DtL.Children[sufbs[common]];
+            }
+            nextNode.L->Valid = true; // this is for the existing ngram
+            nextNode.L->Suffix = std::move(std::string((char*)bs+bidx+common, (char*)bs+bsz)); // the new ngram
+
+            std::cerr << "a6_";
+            
+            cNode->Suffix = ""; // reset the cNode suffix since now its suffix became normal nodes
+            *done = true;
+            return nextNode;
+        }
+            
+        std::cerr << "a7";
+
+        // the common characters are less than suffix size which means we have 
+        // some existing ngram common but we will need to create 2 new nodes for the rest of the existing ngram
+        // and the rest of the new ngram.
+        NodePtr nextNode = cNode;
+        for (size_t sidx=0; sidx<common; ++sidx) {
+            nextNode.L->DtL.Children[sufbs[sidx]] = _newTrieNode(mem, bidx+sidx);
+            nextNode = nextNode.L->DtL.Children[sufbs[sidx]];
+        }
+        // add the remaining of the existing ngram
+        auto newNode = _newTrieNode(mem, bidx+common);
+        nextNode.L->DtL.Children[sufbs[common]] = newNode;
+        if (common+1 == sufsz) {
+            // there was only 1 byte remaining and it was added through a new node.
+            newNode.L->Valid = true;
+        } else {
+            newNode.L->Suffix = std::move(suffix.substr(common+1));
+        }
+
+        // add the remaining of the new ngram
+        if (bidx+common < bsz) {
+            newNode = _newTrieNode(mem, bidx+common);
+            nextNode.L->DtL.Children[bs[bidx+common]] = newNode;
+            if (bidx+common+1 == bsz) {
+                // there was only 1 byte remaining and it was added through a new node.
+                newNode.L->Valid = true;
+            } else {
+                newNode.L->Suffix =std::move(std::string((char*)bs+bidx+common+1, (char*)bs+bsz)); 
+            }           
+        } else {
+            // the common was the whole new ngram
+            nextNode.L->Valid = true;
+        }
+
+        std::cerr << "_";
+
+        cNode->Suffix = ""; // reset the cNode suffix since now its suffix became normal nodes
+        *done = true;
+        return newNode;
+    }
+
     // @param s The whole ngram
     static NodePtr AddString(MemoryPool_t *mem, NodePtr cNode, const std::string& s) {
         const size_t bsz = s.size();
@@ -360,6 +463,7 @@ namespace trie {
         NodePtr previous = (TrieNodeS_t*)nullptr;
         for (size_t bidx = 0; bidx < bsz; bidx++) {
             const uint8_t cb = bs[bidx];
+            bool done = false;
 
             previous = cNode;
 
@@ -433,10 +537,13 @@ namespace trie {
                     }
                 case NodeType::L:
                     {
+                        /*
                         if (!cNode.L->DtL.Children[cb]) {
                             cNode.L->DtL.Children[cb] = _newTrieNode(mem, bidx);
                         }
                         cNode = cNode.L->DtL.Children[cb];
+                        */
+                        cNode = _doAddStringL(mem, cNode.L, bs, bsz, bidx, &done);
                         break;
                     }
                 case NodeType::X:
@@ -454,17 +561,62 @@ namespace trie {
                 default:
                     abort();
             }
-        
+            if (done) { break; }
+
             parent = previous;
+        }
+
+        if (cNode.L->Suffix.empty()) {
+            // this is the last node of the ngram and should be marked as valid
+            cNode.L->Valid = true;
         }
 
         return cNode;
     }
 
+    static inline NodePtr _doDelStringL(TrieNodeL_t *cNode, const uint8_t*bs, const size_t bsz, const size_t bidx, bool *done) {
+        const uint8_t cb = bs[bidx];
+        
+        if (cNode->Suffix.empty()) { // NOT LEAF
+            NodePtr nextNode = cNode->DtL.Children[cb];
+            if (!nextNode) {
+                *done = true;
+                return nullptr;
+            }
+            if (bidx+1 == bsz) {
+                nextNode.L->Valid = false; // make the delete
+                *done = true;
+            }
+            return nextNode;
+        }
+
+        // We are at a LEAF with suffix
+        const auto& suffix = cNode->Suffix;
+        const size_t sufsz = suffix.size();
+        if (sufsz != bsz-bidx) { // we need to match exactly with the whole ngram
+            *done = true;
+            return nullptr;
+        }
+        const uint8_t *sufbs = reinterpret_cast<const uint8_t*>(cNode->Suffix.data());
+        size_t common = 0;
+        for (;common < bsz-bidx && common < sufsz && sufbs[common] == bs[bidx+common];) { ++common; }
+        
+        if (common == sufsz) { // the ngram matched the deleted ngram exactly
+            cNode->Suffix = ""; // reset the cNode suffix to simulate DELETE
+            *done = true;
+            return nullptr;
+        }
+        // Not the same ngram so nothing to delete - just return and end the loop
+        *done = true;
+        return nullptr;
+    }
+
     // @param s The whole ngram
-    static NodePtr FindString(NodePtr cNode, const std::string& s) {
+    static void DelString(NodePtr cNode, const std::string& s) {
         const size_t bsz = s.size();
         const uint8_t* bs = reinterpret_cast<const uint8_t*>(s.data());
+
+        bool done = false;
 
         for (size_t bidx = 0; bidx < bsz; bidx++) {
             const uint8_t cb = bs[bidx];
@@ -477,7 +629,7 @@ namespace trie {
                         const size_t csz = sNode->DtS.Size;
                         size_t cidx = 0;
                         for (;;) {
-                            if (cidx >= csz) { return nullptr; }
+                            if (cidx >= csz) { return; }
                             if (childrenIndex[cidx] == cb) {
                                 cNode = sNode->DtS.Children()[cidx];
                                 break;
@@ -498,7 +650,7 @@ namespace trie {
                         auto bitfield=_mm_movemask_epi8(cmp)&mask;
                         
                         if (!bitfield) {
-                            return nullptr;
+                            return;
                         }
                         
 #ifdef LPDEBUG
@@ -524,10 +676,13 @@ namespace trie {
                     }
                 case NodeType::L:
                     {
+                        /*
                         if (!cNode.L->DtL.Children[cb]) {
                             return nullptr;
                         }
                         cNode = cNode.L->DtL.Children[cb];
+                        */
+                        cNode = _doDelStringL(cNode.L, bs, bsz, bidx, &done);
                         break;
                     }
                 case NodeType::X:
@@ -536,7 +691,7 @@ namespace trie {
                         const std::string key(s.substr(bidx));
                         const auto it = xNode->ChildrenMap.find(key);
                         if (it == xNode->ChildrenMap.end()) {
-                            return nullptr;
+                            return;
                         }
                         cNode = it->second; bidx = bsz;
                         break;
@@ -544,9 +699,10 @@ namespace trie {
                 default:
                     abort();
             }
+            if (done) { break; }
         }
 
-        return cNode;
+        return;
     }
 
     inline static std::vector<std::pair<size_t, uint64_t>> _findAllTypeX(TrieNodeX_t *cNode, std::vector<std::pair<size_t,uint64_t>>& results, const char*s, size_t bidx, const size_t bsz, int opIdx) {
@@ -595,12 +751,49 @@ namespace trie {
             // make sure that the ngram is not ending in the middle of a word
             if (ngsz < cbssz && cbs[ngsz] != ' ') { continue; }
 
-            if ((std::strncmp(ngram.c_str()+firstWordSz, firstWord.first+firstWordSz, ngsz-firstWordSz) == 0) && it->second.S->State.IsValid(opIdx)) {
+            if ((std::strncmp(ngram.c_str()+firstWordSz, firstWord.first+firstWordSz, ngsz-firstWordSz) == 0) && it->second.S->Valid) {
                 results.emplace_back(bidx + ngsz, (uint64_t)it->second.L);
             }
         }
 
         return std::move(results);
+    }
+
+    static inline NodePtr _doFindAllL(TrieNodeL_t *cNode, const uint8_t*bs, const size_t bsz, const size_t bidx, bool *done) {
+        const uint8_t cb = bs[bidx];
+        
+        if (cNode->Suffix.empty()) { // NOT LEAF
+            NodePtr nextNode = cNode->DtL.Children[cb];
+            if (!nextNode) {
+                *done = true;
+                return nullptr;
+            }
+            if (bidx+1 == bsz) {
+                nextNode.L->Valid = false; // make the delete
+                *done = true;
+            }
+            return nextNode;
+        }
+
+        // We are at a LEAF with suffix
+        const auto& suffix = cNode->Suffix;
+        const size_t sufsz = suffix.size();
+        if (sufsz != bsz-bidx) { // we need to match exactly with the whole ngram
+            *done = true;
+            return nullptr;
+        }
+        const uint8_t *sufbs = reinterpret_cast<const uint8_t*>(cNode->Suffix.data());
+        size_t common = 0;
+        for (;common < bsz-bidx && common < sufsz && sufbs[common] == bs[bidx+common];) { ++common; }
+        
+        if (common == sufsz) { // the ngram matched the deleted ngram exactly
+            cNode->Suffix = ""; // reset the cNode suffix to simulate DELETE
+            *done = true;
+            return nullptr;
+        }
+        // Not the same ngram so nothing to delete - just return and end the loop
+        *done = true;
+        return nullptr;
     }
 
     // @param s The whole doc prefix that we need to find ALL NGRAMS matching
@@ -648,10 +841,24 @@ namespace trie {
                     }
                 case NodeType::L:
                     {
-                        if (!cNode.L->DtL.Children[cb]) {
+                        if (cNode.L->Suffix.empty()) {
+                            if (!cNode.L->DtL.Children[cb]) {
+                                return std::move(results);
+                            }
+                            cNode = cNode.L->DtL.Children[cb];
+                        } else {
+                            // the doc has to match the whole ngram suffix
+                            auto suffix = reinterpret_cast<const uint8_t*>(cNode.L->Suffix.data());
+                            if (cNode.L->Suffix.size() != bsz-bidx) { return std::move(results); }
+                            for (size_t sufidx=0, sufsz=cNode.L->Suffix.size(); sufidx<sufsz; sufidx++) {
+                                if (suffix[sufidx] != bs[bidx+sufidx]) { return std::move(results); }
+                            }
+                            bidx += cNode.L->Suffix.size()-1;
+                            if (bidx+1 >= bsz || bs[bidx+1] == ' ') {
+                                results.emplace_back(bidx+1, (uint64_t)cNode.L);
+                            }
                             return std::move(results);
                         }
-                        cNode = cNode.L->DtL.Children[cb];
                         break;
                     }
                 case NodeType::X:
@@ -665,18 +872,58 @@ namespace trie {
 
             // For Types S,M,L
             // at the end of each word check if the ngram so far is a valid result
-            if (bs[bidx+1] == ' ' && cNode.L->State.IsValid(opIdx)) {
+            //if (bs[bidx+1] == ' ' && cNode.L->State.IsValid(opIdx)) {
+            if (bs[bidx+1] == ' ' && cNode.L->Valid) {
                 results.emplace_back(bidx+1, (uint64_t)cNode.L);
             }
         }
 
         // For Types S,M,L
         // We are here it means the whole doc matched the ngram ending at cNode
-        if (cNode && cNode.L->State.IsValid(opIdx)) {
+        //if (cNode && cNode.L->State.IsValid(opIdx)) {
+        if (cNode && cNode.L->Valid) {
             results.emplace_back(bsz, (uint64_t)cNode.L);
         }
 
         return std::move(results);
+    }
+
+    
+    // @param s The whole ngram
+    static NodePtr SearchString(NodePtr cNode, const std::string& s) {
+        const size_t bsz = s.size();
+        const uint8_t* bs = reinterpret_cast<const uint8_t*>(s.data());
+
+        for (size_t bidx = 0; bidx < bsz; bidx++) {
+            const uint8_t cb = bs[bidx];
+
+            switch(cNode.L->Type) {        
+                case NodeType::L:
+                    {
+                        if (cNode.L->Suffix.empty()) {
+                            if (!cNode.L->DtL.Children[cb]) {
+                                return nullptr;
+                            } 
+                            cNode = cNode.L->DtL.Children[cb];
+                        } else {
+                            size_t suffix_length = cNode.L->Suffix.size();
+                            if (suffix_length != bsz - bidx) return nullptr;
+
+                            for (size_t i = 0; i < suffix_length && bidx < bsz; i++, bidx++) {
+                                if (cNode.L->Suffix[i] != bs[bidx]) {
+                                    return nullptr;
+                                }
+                            }
+                            return cNode;
+                        }
+                        break;
+                    }
+                default:
+                    abort();
+            }
+        }
+
+        return nullptr;
     }
 
 
@@ -732,6 +979,8 @@ namespace trie {
         }
     }
 
+#define LPDEBUG 1
+
     struct TrieRoot_t {
         NodePtr Root;
         MemoryPool_t MemoryPool;
@@ -759,21 +1008,23 @@ namespace trie {
     inline static void AddNgram(TrieRoot_t *trie, const std::string& s, int opIdx) {
         //std::cerr << "a::" << s << std::endl;
         auto cNode = cy::trie::AddString(&trie->MemoryPool, trie->Root, s);
-        cNode.L->State.MarkAdd(opIdx);
+        //cNode.L->State.MarkAdd(opIdx);
 #ifdef LPDEBUG
-        if (cNode != cy::trie::FindString(trie->Root, s)) {
+        if (cNode != cy::trie::SearchString(trie->Root, s)) {
             std::cerr << "add or find is wrong!" << std::endl;
             abort();
         }
 #endif
+        //cy::trie::AddString(&trie->MemoryPool, trie->Root, s);
     }
 
     inline static void RemoveNgram(TrieRoot_t*trie, const std::string& s, int opIdx) {
         //std::cerr << "rem::" << s << std::endl;
-        auto cNode = cy::trie::FindString(trie->Root, s);
-        if (cNode) {
-            cNode.L->State.MarkDel(opIdx);
-        }
+        //auto cNode = cy::trie::FindString(trie->Root, s);
+        //if (cNode) {
+        //    cNode.L->State.MarkDel(opIdx);
+        //}
+        cy::trie::DelString(trie->Root, s);
     }
 
 };
