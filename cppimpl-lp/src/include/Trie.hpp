@@ -359,6 +359,9 @@ namespace trie {
         return childNode;
     }
 
+    typedef NodePtr(*AddFunc_t)(NodePtr*, const uint8_t, NodePtr);
+    typedef NodePtr(*SearchFunc_t)(NodePtr, const uint8_t);
+    
     // It might change the *cNode if this node needs to grow to accommodate the new node.
     // @return the added node - nextNode
     static inline NodePtr _doSingleByteAddL(NodePtr *cNode, const uint8_t cb, NodePtr nextNode) {
@@ -369,9 +372,6 @@ namespace trie {
     static inline NodePtr _doSingleByteSearchL(NodePtr cNode, const uint8_t cb) {
         return cNode.L->DtL.Children[cb];
     }
-
-    typedef NodePtr(*AddFunc_t)(NodePtr*, const uint8_t, NodePtr);
-    typedef NodePtr(*SearchFunc_t)(NodePtr, const uint8_t);
 
     static inline NodePtr _doAddStringL(MemoryPool_t *mem, NodePtr cuNode, const uint8_t*bs, const size_t bsz, const size_t bidx, bool *done, AddFunc_t _doSingleByteAdd, SearchFunc_t _doSingleByteSearch) {
         const uint8_t cb = bs[bidx];
@@ -588,17 +588,18 @@ namespace trie {
         return cNode;
     }
 
-    static inline NodePtr _doDelStringL(TrieNodeL_t *cNode, const uint8_t*bs, const size_t bsz, const size_t bidx, bool *done) {
+    static inline NodePtr _doDelString(NodePtr cuNode, const uint8_t*bs, const size_t bsz, const size_t bidx, bool *done, SearchFunc_t _doSingleByteSearch) {
         const uint8_t cb = bs[bidx];
+        const auto cNode = cuNode.S; // SHOULD NOT MATTER which type I take!!!
 
         if (cNode->Suffix.empty()) { // NOT LEAF
-            NodePtr nextNode = cNode->DtL.Children[cb];
+            NodePtr nextNode = _doSingleByteSearch(cNode, cb);
             if (!nextNode) {
                 *done = true;
                 return nullptr;
             }
             if (bidx+1 == bsz) {
-                nextNode.L->Valid = false; // make the delete
+                nextNode.S->Valid = false; // make the delete
                 *done = true;
             }
             return nextNode;
@@ -696,7 +697,7 @@ namespace trie {
                         }
                         cNode = cNode.L->DtL.Children[cb];
                         */
-                        cNode = _doDelStringL(cNode.L, bs, bsz, bidx, &done);
+                        cNode = _doDelString(cNode, bs, bsz, bidx, &done, _doSingleByteSearchL);
                         break;
                     }
                 case NodeType::X:
@@ -773,6 +774,27 @@ namespace trie {
         return std::move(results);
     }
 
+    // @return the pointer to the next node to visit or nullptr if we finished and need to return the results
+    static NodePtr _doFindAll(NodePtr cuNode, const uint8_t cb, const size_t bsz, const uint8_t *bs, const size_t bidx, std::vector<std::pair<size_t, uint64_t>>& results, SearchFunc_t _doSingleByteSearch) {
+        const auto cNode = cuNode.S; // SHOULD NOT MATTER WHAT TYPE YOU GET
+        if (cNode->Suffix.empty()) {
+            return _doSingleByteSearch(cNode, cb);
+        } else {
+            // the doc has to match the whole ngram suffix
+            auto suffix = reinterpret_cast<const uint8_t*>(cNode->Suffix.data());
+            const auto sufsz = cNode->Suffix.size();
+            if (sufsz > bsz-bidx) { return nullptr; }
+            for (size_t sufidx=0; sufidx<sufsz; sufidx++) {
+                if (suffix[sufidx] != bs[bidx+sufidx]) { return nullptr; }
+            }
+            const size_t nbidx = bidx + sufsz;
+            if (nbidx >= bsz || bs[nbidx] == ' ') {
+                results.emplace_back(nbidx, (uint64_t)suffix);
+            }
+            return nullptr;
+        }
+    }
+
     // @param s The whole doc prefix that we need to find ALL NGRAMS matching
     static std::vector<std::pair<size_t, uint64_t>> FindAll(NodePtr cNode, const char *s, const size_t docSize, int opIdx) {
         const size_t bsz = docSize;
@@ -818,6 +840,7 @@ namespace trie {
                     }
                 case NodeType::L:
                     {
+                        /*
                         if (cNode.L->Suffix.empty()) {
                             if (!cNode.L->DtL.Children[cb]) {
                                 return std::move(results);
@@ -837,6 +860,9 @@ namespace trie {
                             }
                             return std::move(results);
                         }
+                        */
+                        cNode = _doFindAll(cNode, cb, bsz, bs, bidx, results, _doSingleByteSearchL);
+                        if (!cNode) { return std::move(results); }
                         break;
                     }
                 case NodeType::X:
@@ -846,7 +872,7 @@ namespace trie {
                     }
                 default:
                     abort();
-            }
+            } // end of switch
 
             // For Types S,M,L
             // at the end of each word check if the ngram so far is a valid result
