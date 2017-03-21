@@ -17,7 +17,7 @@
 #include <algorithm>
 #include <cassert>
 
-#include <omp.h>
+//#include <omp.h>
 
 //#define USE_OPENMP
 //#define USE_PARALLEL
@@ -81,12 +81,12 @@ struct NgramDB {
     public:
 
     NgramDB() {}
-    
+
     void AddNgram(const std::string& s, int opIdx) {
         //std::cerr << "a::" << s << std::endl;
         cy::trie::AddNgram(&Trie, s, opIdx);
     }
-    
+
     void RemoveNgram(const std::string& s, int opIdx) {
         //std::cerr << "rem::" << s << std::endl;
         cy::trie::RemoveNgram(&Trie, s, opIdx);
@@ -96,7 +96,7 @@ struct NgramDB {
     // TODO Return a vector of pairs [start, end) for each ngram matched and the NGRAM's IDX (create this at each trie node)
     // TODO this way we do not copy strings so many times and the uniqueness when printing the results will use the ngram IDX
     // TODO for super fast hashing in the visited set, whereas now we use strings as keys!!!
-    std::vector<Result_t> FindNgrams(const std::string& doc, size_t docStart, size_t opIdx) { 
+    std::vector<Result_t> FindNgrams(const std::string& doc, size_t docStart, size_t opIdx) {
         // TODO Use char* directly to the doc to avoid copying
         std::vector<Result_t> results;
         const char*docStr = doc.data();
@@ -144,7 +144,7 @@ void outputResults(std::ostream& out, const std::vector<Result_t>& results) {
             //out << "|" << std::move(std::string(ngram.start, ngram.end-ngram.start));
         }
     }
-	ss << "\n"; 
+	ss << "\n";
     out << ss.str();
 }
 
@@ -166,7 +166,7 @@ std::vector<Result_t> queryEvaluationWithResults(NgramDB *ngdb, const OpQuery& o
         if (!cresult.empty()) {
             results.insert(results.end(), cresult.begin(), cresult.end());
         }
-		
+
         for (end = start; end < sz && doc[end] != ' '; ++end) {}
     }
 
@@ -209,7 +209,7 @@ bool readNextBatch(istream& in, NgramDB *ngdb, vector<OpQuery>& opQs, vector<OpU
 
         auto startSingle = timer.getChrono();
         char type = line[0];
-        switch (type) { 
+        switch (type) {
             case 'A':
                 //opUs.emplace_back(line.substr(2), opIdx, OpType_t::ADD);
                 //Q.emplace_back(line.substr(2), opIdx, OpType_t::ADD);
@@ -290,7 +290,7 @@ void processWorkloadSingle(istream& in, NgramDB *ngdb, WorkersContext *wctx, int
         if (opQs.empty()) { continue; }
 
         auto tAs = timer.getChrono();
-        processUpdatesBatch(ngdb, wctx, &opUs); 
+        processUpdatesBatch(ngdb, wctx, &opUs);
         tA += timer.getChrono(tAs);
 
         auto tQs = timer.getChrono();
@@ -305,7 +305,7 @@ void processWorkloadSingle(istream& in, NgramDB *ngdb, WorkersContext *wctx, int
 }
 std::unique_ptr<NgramDB> readInitial(std::istream& in, int *outOpIdx) {
     auto start = timer.getChrono();
-	
+
     auto ngdb = std::unique_ptr<NgramDB>(new NgramDB());
     int opIdx{0};
 
@@ -315,7 +315,7 @@ std::unique_ptr<NgramDB> readInitial(std::istream& in, int *outOpIdx) {
 			std::cerr << "error" << std::endl;
 			break;
 		}
-		
+
 		if (line == "S") {
 			std::cerr << "init::" << timer.getChrono(start) << std::endl;
             std::cout << "R" << std::endl;
@@ -339,7 +339,7 @@ int main(int argc, char**argv) {
 #ifdef USE_OPENMP
     omp_set_dynamic(0);
     omp_set_num_threads(threads);
-    
+
     std::cerr << "affinity::" << omp_get_proc_bind() << " threads::" << threads <<std::endl;
 #endif
 
@@ -353,9 +353,9 @@ int main(int argc, char**argv) {
 
     WorkersContext wctx;
     wctx.NumThreads = threads;
-   
+
     processWorkloadSingle(std::cin, ngdb.get(), &wctx, opIdx);
-    
+
     std::cerr << "main::" << timer.getChrono(start) << std::endl;
 }
 
