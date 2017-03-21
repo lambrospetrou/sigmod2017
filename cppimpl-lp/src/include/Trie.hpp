@@ -41,7 +41,7 @@ namespace trie {
     enum class OpType : uint8_t { ADD = 0, DEL = 1 };
     enum class NodeType : uint8_t { S = 0, M = 1, L = 2, X = 3 };
 
-    constexpr size_t TYPE_S_MAX = 4;
+    constexpr size_t TYPE_S_MAX = 2;
     constexpr size_t TYPE_M_MAX = 16;
     constexpr size_t TYPE_L_MAX = 256;
     constexpr size_t TYPE_X_DEPTH = 24;
@@ -136,7 +136,7 @@ namespace trie {
         const NodeType Type = NodeType::S;
         //RecordHistory State;
         bool Valid;
-	std::string Suffix;
+
         DataS<TYPE_S_MAX> DtS;    
     };
     struct TrieNodeM_t {
@@ -316,55 +316,6 @@ namespace trie {
         }
         return childNode;
     }
-
-    inline static NodePtr _growTypeSToLWith(MemoryPool_t *mem, TrieNodeS_t *cNode, NodePtr parent, const uint8_t pb, const uint8_t cb) {
-       auto newNode = _newTrieNodeL(mem).L;
-        
-        //newNode->State = std::move(cNode->State);
-        newNode->Valid = cNode->Valid;
-      
-
-        for (size_t cidx=0; cidx<TYPE_S_MAX; ++cidx) {
-	     newNode->DtL.Children[cNode->DtS.ChildrenIndex[cidx]] =  cNode->DtS.Children()[cidx];
-        }
-
-        auto childNode = _newTrieNodeS(mem);
-        newNode->DtL.Children[cb] = childNode;
-        
-	switch(parent.S->Type) {
-        case NodeType::S: 
-        {
-            auto sp = parent.S;
-            for (size_t cidx=0; cidx<sp->DtS.Size; ++cidx) {
-                if (sp->DtS.ChildrenIndex[cidx] == pb) {
-                    sp->DtS.Children()[cidx] = newNode;
-                    break;
-                }
-            }
-            break; 
-        }
-        case NodeType::M: 
-        {
-            auto sp = parent.M;
-            for (size_t cidx=0; cidx<sp->DtM.Size; ++cidx) {
-                if (sp->DtM.ChildrenIndex[cidx] == pb) {
-                    sp->DtM.Children()[cidx] = newNode;
-                    break;
-                }
-            }
-            break; 
-        }
-        case NodeType::L:
-            parent.L->DtL.Children[pb] = newNode;
-            break;
-        default:
-            abort();
-        }
-        return childNode;
-    }
-
-
-
     inline static NodePtr _growTypeMWith(MemoryPool_t *mem, TrieNodeM_t *cNode, NodePtr parent, const uint8_t pb, const uint8_t cb) {
         auto newNode = _newTrieNodeL(mem).L;
         
@@ -413,186 +364,24 @@ namespace trie {
     static inline NodePtr _doAddStringL(MemoryPool_t *mem, TrieNodeL_t *cNode, const uint8_t*bs, const size_t bsz, const size_t bidx, bool *done) {
         const uint8_t cb = bs[bidx];
 
-
-
-	if (cNode->Suffix.empty()) { // We just need to check children
+        if (cNode->Suffix.empty()) { // We just need to check children
             NodePtr nextNode = cNode->DtL.Children[cb];
             if (!nextNode) {
-                nextNode = _newTrieNodeS(mem);
+                nextNode = _newTrieNode(mem, bidx);
                 if (bidx+1 < bsz) { // this is NOT the last byte so add the remaining as suffix
-                    nextNode.S->Suffix = std::move(std::string(bs+bidx+1, bs+bsz));
+                    nextNode.L->Suffix = std::move(std::string(bs+bidx+1, bs+bsz));
                     *done = true;
                 }
                 cNode->DtL.Children[cb] = nextNode;
             }
             // If this is the last byte of the ngram mark its node as valid
             if (bidx+1 == bsz) {
-
-		//mayby check the type here // i did but made no difference
-                nextNode.S->Valid = true;
-                *done = true;
-            }
-            return nextNode;
-	 } 
-
-
-
-
-
-        
-        // We are at a LEAF with suffix
-        const auto& suffix = cNode->Suffix;
-        const size_t sufsz = suffix.size();
-        const uint8_t *sufbs = reinterpret_cast<const uint8_t*>(cNode->Suffix.data());
-        size_t common = 0;
-        for (;common < bsz-bidx && common < sufsz && sufbs[common] == bs[bidx+common];) { ++common; }
-        
-        if (common == sufsz) { // the new ngram matched the whole existing suffix
-            if (common == bsz-bidx) { // we are already at the proper node - don't do anything
-                *done = true;
-                return cNode;
-            }
-            // there is some part of the new ngram to be added so we need to create the nodes
-            // to cover the common bytes and then we will add as suffix the remaining part of the new ngram
-            NodePtr nextNode; //= cNode;
-            
-	    //todo:convert the LARGE TYPE LEAF to an S TYPE ...WE NEED TO PASS PARENT FOR THAT
-
-	    
-								
-	    cNode->DtL.Children[sufbs[0]] = _newTrieNodeS(mem);
-            nextNode = cNode->DtL.Children[sufbs[0]];
-
-	    for (size_t sidx=1; sidx<common; ++sidx) {
-                
-		nextNode.S->DtS.Children()[nextNode.S->DtS.Size] = _newTrieNodeS(mem);
-                nextNode.S->DtS.ChildrenIndex[nextNode.S->DtS.Size] = sufbs[sidx];
-								
-                nextNode = nextNode.S->DtS.Children()[nextNode.S->DtS.Size++];
-
-		//nextNode.L->DtL.Children[sufbs[sidx]] = _newTrieNode(mem, bidx);
-                //nextNode = nextNode.L->DtL.Children[sufbs[sidx]];
-            }
-            nextNode.S->Valid = true; // this is for the existing ngram
-            nextNode.S->Suffix = std::move(std::string((char*)bs+bidx+common, (char*)bs+bsz)); // the new ngram
-
-            cNode->Suffix = ""; // reset the cNode suffix since now its suffix became normal nodes
-            *done = true;
-            return nextNode;
-        }
-            
-        // the common characters are less than suffix size which means we have 
-        // some existing ngram common but we will need to create 2 new nodes for the rest of the existing ngram
-        // and the rest of the new ngram.
-        NodePtr nextNode;// = cNode;
-
-	  cNode->DtL.Children[sufbs[0]] = _newTrieNodeS(mem);
-          nextNode = cNode->DtL.Children[sufbs[0]];
-
-
-
-
-        for (size_t sidx=1; sidx<common; ++sidx) {
-           nextNode.S->DtS.Children()[nextNode.S->DtS.Size] = _newTrieNodeS(mem);
-           nextNode.S->DtS.ChildrenIndex[nextNode.S->DtS.Size] = sufbs[sidx];
-								
-           nextNode = nextNode.S->DtS.Children()[nextNode.S->DtS.Size++];
-        }
-        // add the remaining of the existing ngram
-
-
-         //, bidx+common);
-	auto newNode = _newTrieNodeS(mem);;
-	nextNode.S->DtS.Children()[nextNode.S->DtS.Size] = newNode;
-                nextNode.S->DtS.ChildrenIndex[nextNode.S->DtS.Size++] = sufbs[common];
-								
-                //NodePtr newNode = nextNode.S->DtS.Children()[nextNode.S->DtS.Size++];
-
-
-        //nextNode.L->DtL.Children[sufbs[common]] = _newTrieNodeS(mem);;
-	//NodePtr newNode =  nextNode.L->DtL.Children[sufbs[common]]
-
-        if (common+1 == sufsz) {
-            // there was only 1 byte remaining and it was added through a new node.
-            newNode.S->Valid = true;
-        } else {
-            newNode.S->Suffix = std::move(suffix.substr(common+1));
-        }
-
-        // add the remaining of the new ngram
-        if (bidx+common < bsz) {
-
-		newNode = _newTrieNodeS(mem);
-	    nextNode.S->DtS.Children()[nextNode.S->DtS.Size] = newNode;
-            nextNode.S->DtS.ChildrenIndex[nextNode.S->DtS.Size++] = bs[bidx+common];
-	    
-
-            //newNode = nextNode.S->DtS.Children()[nextNode.S->DtS.Size++];
-           // nextNode.L->DtL.Children[bs[bidx+common]] = newNode;
-            if (bidx+common+1 == bsz) {
-                // there was only 1 byte remaining and it was added through a new node.
-                newNode.S->Valid = true;
-            } else {
-                newNode.S->Suffix =std::move(std::string((char*)bs+bidx+common+1, (char*)bs+bsz)); 
-            }
-            nextNode = newNode;
-        } else {
-            // the common was the whole new ngram
-            nextNode.S->Valid = true;
-        }
-
-        cNode->Suffix = ""; // reset the cNode suffix since now its suffix became normal nodes
-        *done = true;
-        return nextNode;
-    }
-
-
-     static inline NodePtr _doAddStringS(MemoryPool_t *mem, TrieNodeS_t *cNode,NodePtr parent, const uint8_t*bs, const size_t bsz, const size_t bidx, bool *done) {
-        const uint8_t cb = bs[bidx];
-	
-	 		
-
-
-	const auto childrenIndex = cNode->DtS.ChildrenIndex;
-        const size_t csz = cNode->DtS.Size;
-	size_t cidx = 0;
-        if (cNode->Suffix.empty()) { // We just need to check children
-            NodePtr nextNode; //= childrenIndex[csz];    //cNode->DtL.Children[cb];
-		bool childFound = true;
-             for (;;) {
-                            if (cidx >= csz) {
-                                if (csz == TYPE_S_MAX) {
-                                   nextNode = _growTypeSToLWith(mem, cNode, parent, bs[bidx-1], cb);  //we try to add cb but we exceed the max children so we create an L and we point to an S (the return)
-                                } else {
-                                    cNode->DtS.Children()[cNode->DtS.Size++] = _newTrieNodeS(mem);
-                                    childrenIndex[csz] = cb;
-                                    nextNode = cNode->DtS.Children()[csz];
-                                }
-				childFound = false;
-                                break;
-                            }
-                            if (childrenIndex[cidx] == cb) {
-                                nextNode = cNode->DtS.Children()[cidx];
-                                break;
-                            }
-                            cidx++;
-                }
-		if (!childFound) {
-                //nextNode = _newTrieNode(mem, bidx);
-                if (bidx+1 < bsz) { // this is NOT the last byte so add the remaining as suffix
-                    nextNode.S->Suffix = std::move(std::string(bs+bidx+1, bs+bsz));
-                    *done = true;
-                }
-               // cNode->DtL.Children[cb] = nextNode;
-            }
-            // If this is the last byte of the ngram mark its node as valid
-            if (bidx+1 == bsz) {
-                nextNode.S->Valid = true;
+                nextNode.L->Valid = true;
                 *done = true;
             }
             return nextNode;
         } 
-
+        
         // We are at a LEAF with suffix
         const auto& suffix = cNode->Suffix;
         const size_t sufsz = suffix.size();
@@ -607,34 +396,13 @@ namespace trie {
             }
             // there is some part of the new ngram to be added so we need to create the nodes
             // to cover the common bytes and then we will add as suffix the remaining part of the new ngram
-            NodePtr nextNode; //= cNode;
-            
-	    //todo:convert the LARGE TYPE LEAF to an S TYPE ...WE NEED TO PASS PARENT FOR THAT
-
-	    
-								
-	    //cNode->DtL.Children[sufbs[0]] = _newTrieNodeS(mem);
-            //nextNode = cNode->DtL.Children[sufbs[0]];
-	    
-
-	    cNode->DtS.Children()[cNode->DtS.Size] = _newTrieNodeS(mem);
-                cNode->DtS.ChildrenIndex[cNode->DtS.Size] = sufbs[0];
-								
-                nextNode = cNode->DtS.Children()[cNode->DtS.Size++];
-
-
-	    for (size_t sidx=1; sidx<common; ++sidx) {
-                
-		nextNode.S->DtS.Children()[nextNode.S->DtS.Size] = _newTrieNodeS(mem);
-                nextNode.S->DtS.ChildrenIndex[nextNode.S->DtS.Size] = sufbs[sidx];
-								
-                nextNode = nextNode.S->DtS.Children()[nextNode.S->DtS.Size++];
-
-		//nextNode.L->DtL.Children[sufbs[sidx]] = _newTrieNode(mem, bidx);
-                //nextNode = nextNode.L->DtL.Children[sufbs[sidx]];
+            NodePtr nextNode = cNode;
+            for (size_t sidx=0; sidx<common; ++sidx) {
+                nextNode.L->DtL.Children[sufbs[sidx]] = _newTrieNode(mem, bidx);
+                nextNode = nextNode.L->DtL.Children[sufbs[sidx]];
             }
-            nextNode.S->Valid = true; // this is for the existing ngram
-            nextNode.S->Suffix = std::move(std::string((char*)bs+bidx+common, (char*)bs+bsz)); // the new ngram
+            nextNode.L->Valid = true; // this is for the existing ngram
+            nextNode.L->Suffix = std::move(std::string((char*)bs+bidx+common, (char*)bs+bsz)); // the new ngram
 
             cNode->Suffix = ""; // reset the cNode suffix since now its suffix became normal nodes
             *done = true;
@@ -644,71 +412,41 @@ namespace trie {
         // the common characters are less than suffix size which means we have 
         // some existing ngram common but we will need to create 2 new nodes for the rest of the existing ngram
         // and the rest of the new ngram.
-        NodePtr nextNode;// = cNode;
-
-	 cNode->DtS.Children()[cNode->DtS.Size] = _newTrieNodeS(mem);
-                cNode->DtS.ChildrenIndex[cNode->DtS.Size] = sufbs[0];
-								
-                nextNode = cNode->DtS.Children()[cNode->DtS.Size++];
-
-
-
-
-
-        for (size_t sidx=1; sidx<common; ++sidx) {
-           nextNode.S->DtS.Children()[nextNode.S->DtS.Size] = _newTrieNodeS(mem);
-           nextNode.S->DtS.ChildrenIndex[nextNode.S->DtS.Size] = sufbs[sidx];
-								
-           nextNode = nextNode.S->DtS.Children()[nextNode.S->DtS.Size++];
+        NodePtr nextNode = cNode;
+        for (size_t sidx=0; sidx<common; ++sidx) {
+            nextNode.L->DtL.Children[sufbs[sidx]] = _newTrieNode(mem, bidx+sidx);
+            nextNode = nextNode.L->DtL.Children[sufbs[sidx]];
         }
         // add the remaining of the existing ngram
-
-
-         //, bidx+common);
-
-	nextNode.S->DtS.Children()[nextNode.S->DtS.Size] = _newTrieNodeS(mem);
-                nextNode.S->DtS.ChildrenIndex[nextNode.S->DtS.Size] = sufbs[common];
-								
-                NodePtr newNode = nextNode.S->DtS.Children()[nextNode.S->DtS.Size++];
-
-
-        //nextNode.L->DtL.Children[sufbs[common]] = _newTrieNodeS(mem);;
-	//NodePtr newNode =  nextNode.L->DtL.Children[sufbs[common]]
-
+        auto newNode = _newTrieNode(mem, bidx+common);
+        nextNode.L->DtL.Children[sufbs[common]] = newNode;
         if (common+1 == sufsz) {
             // there was only 1 byte remaining and it was added through a new node.
-            newNode.S->Valid = true;
+            newNode.L->Valid = true;
         } else {
-            newNode.S->Suffix = std::move(suffix.substr(common+1));
+            newNode.L->Suffix = std::move(suffix.substr(common+1));
         }
 
         // add the remaining of the new ngram
         if (bidx+common < bsz) {
-	    nextNode.S->DtS.Children()[nextNode.S->DtS.Size] = _newTrieNodeS(mem);
-            nextNode.S->DtS.ChildrenIndex[nextNode.S->DtS.Size] = bs[bidx+common];
-	    
-
-            newNode = nextNode.S->DtS.Children()[nextNode.S->DtS.Size++];
-           // nextNode.L->DtL.Children[bs[bidx+common]] = newNode;
+            newNode = _newTrieNode(mem, bidx+common);
+            nextNode.L->DtL.Children[bs[bidx+common]] = newNode;
             if (bidx+common+1 == bsz) {
                 // there was only 1 byte remaining and it was added through a new node.
-                newNode.S->Valid = true;
+                newNode.L->Valid = true;
             } else {
-                newNode.S->Suffix =std::move(std::string((char*)bs+bidx+common+1, (char*)bs+bsz)); 
+                newNode.L->Suffix =std::move(std::string((char*)bs+bidx+common+1, (char*)bs+bsz)); 
             }
             nextNode = newNode;
         } else {
             // the common was the whole new ngram
-            nextNode.S->Valid = true;
+            nextNode.L->Valid = true;
         }
 
         cNode->Suffix = ""; // reset the cNode suffix since now its suffix became normal nodes
         *done = true;
         return nextNode;
     }
-
-
-
 
     // @param s The whole ngram
     static NodePtr AddString(MemoryPool_t *mem, NodePtr cNode, const std::string& s) {
@@ -725,10 +463,27 @@ namespace trie {
             switch(cNode.L->Type) {
                 case NodeType::S:
                     {
-
-			//std::cerr<<"S"<<std::endl;
-			//_doAddStringS
-                       cNode = _doAddStringS(mem, cNode.S, parent, bs, bsz, bidx, &done);
+                        const auto sNode = cNode.S;
+                        const auto childrenIndex = sNode->DtS.ChildrenIndex;
+                        const size_t csz = sNode->DtS.Size;
+                        size_t cidx = 0;
+                        for (;;) {
+                            if (cidx >= csz) {
+                                if (csz == TYPE_S_MAX) {
+                                    cNode = _growTypeSWith(mem, sNode, parent, bs[bidx-1], cb);
+                                } else {
+                                    sNode->DtS.Children()[sNode->DtS.Size++] = _newTrieNode(mem, bidx);
+                                    childrenIndex[csz] = cb;
+                                    cNode = sNode->DtS.Children()[csz];
+                                }
+                                break;
+                            }
+                            if (childrenIndex[cidx] == cb) {
+                                cNode = sNode->DtS.Children()[cidx];
+                                break;
+                            }
+                            cidx++;
+                        }
                         break;
                     }
                 case NodeType::M:
@@ -838,65 +593,6 @@ namespace trie {
         return nullptr;
     }
 
-    static inline NodePtr _doDelStringS(TrieNodeS_t *cNode, const uint8_t*bs, const size_t bsz, const size_t bidx, bool *done) {
-        const uint8_t cb = bs[bidx];
-        
-
-
-        if (cNode->Suffix.empty()) { // NOT LEAF
-            NodePtr nextNode;// = cNode->DtL.Children[cb];
-	    const auto childrenIndex = cNode->DtS.ChildrenIndex;
-            const size_t csz = cNode->DtS.Size;
-	    size_t cidx = 0;
-	    bool found = false;	
-	    for (;;) {
-		  if (cidx >= csz) {
-		  found = false;
-		  break;
-		  }
-	    	  if (childrenIndex[cidx] == cb) {
-		  nextNode = cNode->DtS.Children()[cidx];
-                  found=true;
-                  break;
-                  }
-		cidx++;
-
-            }
-
-
-            if (!found) {
-                *done = true;
-                return nullptr;
-            }
-            if (bidx+1 == bsz) {
-                nextNode.S->Valid = false; // make the delete
-                *done = true;
-            }
-            return nextNode;
-        }
-
-        // We are at a LEAF with suffix
-        const auto& suffix = cNode->Suffix;
-        const size_t sufsz = suffix.size();
-        if (sufsz != bsz-bidx) { // we need to match exactly with the whole ngram
-            *done = true;
-            return nullptr;
-        }
-        const uint8_t *sufbs = reinterpret_cast<const uint8_t*>(cNode->Suffix.data());
-        size_t common = 0;
-        for (;common < bsz-bidx && common < sufsz && sufbs[common] == bs[bidx+common];) { ++common; }
-        
-        if (common == sufsz) { // the ngram matched the deleted ngram exactly
-            cNode->Suffix = ""; // reset the cNode suffix to simulate DELETE
-            *done = true;
-            return nullptr;
-        }
-        // Not the same ngram so nothing to delete - just return and end the loop
-        *done = true;
-        return nullptr;
-    }
-
-
     // @param s The whole ngram
     static void DelString(NodePtr cNode, const std::string& s) {
         const size_t bsz = s.size();
@@ -910,7 +606,19 @@ namespace trie {
             switch(cNode.L->Type) {
                 case NodeType::S:
                     {
-                        cNode = _doDelStringS(cNode.S, bs, bsz, bidx, &done);
+                        const auto sNode = cNode.S;
+                        const auto childrenIndex = sNode->DtS.ChildrenIndex;
+                        const size_t csz = sNode->DtS.Size;
+                        size_t cidx = 0;
+                        for (;;) {
+                            if (cidx >= csz) { return; }
+                            if (childrenIndex[cidx] == cb) {
+                                cNode = sNode->DtS.Children()[cidx];
+                                break;
+                            }
+                            cidx++;
+                        }
+
                         break;    
                     }
                 case NodeType::M:
@@ -1047,41 +755,19 @@ namespace trie {
             switch(cNode.L->Type) {
                 case NodeType::S:
                     {
-			 if (cNode.S->Suffix.empty()) {
-                            const auto sNode = cNode.S;
-                            const auto childrenIndex = sNode->DtS.ChildrenIndex;
-                            const size_t csz = sNode->DtS.Size;
-                            size_t cidx = 0;
-                            for (;;) {
-                            	if (cidx >= csz) { return std::move(results); }
-                            	if (childrenIndex[cidx] == cb) {
+                        const auto sNode = cNode.S;
+                        const auto childrenIndex = sNode->DtS.ChildrenIndex;
+                        const size_t csz = sNode->DtS.Size;
+                        size_t cidx = 0;
+                        for (;;) {
+                            if (cidx >= csz) { return std::move(results); }
+                            if (childrenIndex[cidx] == cb) {
                                 cNode = sNode->DtS.Children()[cidx];
                                 break;
-                            	}
+                            }
                             cidx++;
-                           }
-
-                        } else {
-                            // the doc has to match the whole ngram suffix
-                            auto suffix = reinterpret_cast<const uint8_t*>(cNode.S->Suffix.data());
-                            const auto sufsz = cNode.S->Suffix.size();
-                            if (sufsz > bsz-bidx) { return std::move(results); }
-                            for (size_t sufidx=0; sufidx<sufsz; sufidx++) {
-                                if (suffix[sufidx] != bs[bidx+sufidx]) { return std::move(results); }
-                            }
-                            bidx += sufsz;
-                            if (bidx >= bsz || bs[bidx] == ' ') {
-                                results.emplace_back(bidx, (uint64_t)suffix);
-                            }
-                            return std::move(results);
                         }
                         break;
-
-	
-
-
-
-
                     }
                 case NodeType::M:
                     {
@@ -1132,40 +818,18 @@ namespace trie {
 
             // For Types S,M,L
             // at the end of each word check if the ngram so far is a valid result
-	    if(cNode.L->Type == NodeType::S)
-	    {
-		if (bs[bidx+1] == ' ' && cNode.S->Valid)  {
-                results.emplace_back(bidx+1, (uint64_t)cNode.S);
-            	}
-
-	    }
-	    else
-	    { 
-		if (bs[bidx+1] == ' ' && cNode.L->Valid)  {
+            if (bs[bidx+1] == ' ' && cNode.L->Valid) {
                 results.emplace_back(bidx+1, (uint64_t)cNode.L);
-            	}
-	    }
-
-            
+            }
         }
 
         // For Types S,M,L
         // We are here it means the whole doc matched the ngram ending at cNode
         //if (cNode && cNode.L->State.IsValid(opIdx)) {
-	if(cNode.L->Type == NodeType::S)
-	{
-	if (cNode && cNode.S->Valid) {
-            results.emplace_back(bsz, (uint64_t)cNode.S);
-        }
-
-	}
-
-
-	else{
-        if (cNode && cNode.L->Valid  ) {
+        if (cNode && cNode.L->Valid) {
             results.emplace_back(bsz, (uint64_t)cNode.L);
         }
-	}
+
         return std::move(results);
     }
 
