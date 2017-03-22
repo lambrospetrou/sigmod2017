@@ -41,7 +41,7 @@ namespace trie {
     enum class OpType : uint8_t { ADD = 0, DEL = 1 };
     enum class NodeType : uint8_t { S = 0, M = 1, L = 2, X = 3 };
 
-    constexpr size_t TYPE_S_MAX = 2;
+    constexpr size_t TYPE_S_MAX = 4;
     constexpr size_t TYPE_M_MAX = 16;
     constexpr size_t TYPE_L_MAX = 256;
     constexpr size_t TYPE_X_DEPTH = 24;
@@ -129,13 +129,9 @@ namespace trie {
         };
 
 
-    // Aligned    : 128::256::2112::64
-    // Non-Aligned: 96::200::2088::48
-
     struct TrieNodeS_t {
         const NodeType Type = NodeType::S;
         bool Valid;
-
         std::string Suffix;
 
         DataS<TYPE_S_MAX> DtS;
@@ -153,7 +149,6 @@ namespace trie {
     struct TrieNodeL_t {
         const NodeType Type = NodeType::L;
         bool Valid;
-
         std::string Suffix;
 
         struct DataL {
@@ -182,10 +177,10 @@ namespace trie {
             _mS.reserve(128);
             _mS.push_back(new TrieNodeS_t[MEMORY_POOL_BLOCK_SIZE_S]);
 
-            _mM.reserve(128);
+            _mM.reserve(4);
             _mM.push_back(new TrieNodeM_t[MEMORY_POOL_BLOCK_SIZE_M]);
 
-            _mL.reserve(128);
+            _mL.reserve(4);
             _mL.push_back(new TrieNodeL_t[MEMORY_POOL_BLOCK_SIZE_L]);
 #ifdef USE_TYPE_X
             _mX.reserve(128);
@@ -273,7 +268,6 @@ namespace trie {
     inline static NodePtr _growTypeSWith(MemoryPool_t *mem, TrieNodeS_t *cNode, NodePtr parent, const uint8_t pb, const uint8_t cb, NodePtr nextNode) {
         auto newNode = _newTrieNodeM(mem).M;
 
-        //newNode->State = std::move(cNode->State);
         newNode->Valid = cNode->Valid;
         newNode->DtM.Size = TYPE_S_MAX+1;
 
