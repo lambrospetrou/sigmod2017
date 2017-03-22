@@ -42,24 +42,25 @@ enum OpType_t : uint8_t { ADD = 0, DEL = 1, Q = 2 };
 
 struct OpQuery {
     std::string Doc;
-	int OpIdx;
+    int OpIdx;
 
     OpQuery() {}
     OpQuery(string d, int idx) : Doc(d), OpIdx(idx) {}
 };
+/*
 struct OpUpdate {
     std::string Ngram;
-	int OpIdx;
-	OpType_t OpType;
+    int OpIdx;
+    OpType_t OpType;
 
     OpUpdate() {}
     OpUpdate(string ngram, int idx, OpType_t t) : Ngram(std::move(ngram)), OpIdx(idx), OpType(t) {}
 };
-
+*/
 struct Op_t {
     std::string Line;
-	int OpIdx;
-	OpType_t OpType;
+    int OpIdx;
+    OpType_t OpType;
 
     Op_t() {}
     Op_t(string l, int idx, OpType_t t) : Line(std::move(l)), OpIdx(idx), OpType(t) {}
@@ -92,12 +93,8 @@ struct NgramDB {
         cy::trie::RemoveNgram(&Trie, s, opIdx);
     }
 
-    // TODO Optimization
-    // TODO Return a vector of pairs [start, end) for each ngram matched and the NGRAM's IDX (create this at each trie node)
-    // TODO this way we do not copy strings so many times and the uniqueness when printing the results will use the ngram IDX
-    // TODO for super fast hashing in the visited set, whereas now we use strings as keys!!!
+    // @param doc The part of the doc to find all matching ngrams that have doc (or part of doc) as their prefix.
     std::vector<Result_t> FindNgrams(const std::string& doc, size_t docStart, size_t opIdx) {
-        // TODO Use char* directly to the doc to avoid copying
         std::vector<Result_t> results;
         const char*docStr = doc.data();
         const auto& ngramResults = cy::trie::FindAll(Trie.Root, doc.data()+docStart, doc.size()-docStart, opIdx);
@@ -109,15 +106,44 @@ struct NgramDB {
     }
 };
 
+// Data for each thread
+struct ThreadData_t {
+    NgramDB *Ngdb;
+
+    ThreadData_t() {
+        Ngdb = new NgramDB();
+    }
+    ~ThreadData_t() {
+        if (Ngdb) { delete Ngdb; }
+    }
+};
+
+struct GResult_t {
+    size_t DocIdx;
+    std::vector<Result_t> Results;
+    size_t ThreadsDone;
+
+    GResult_t() : DocIdx(0), ThreadsDone(0) {}
+};
+
+typedef std::vector<GResult_t> GResultAgg_t;
+
 struct WorkersContext {
     size_t NumThreads;
+    std::vector<ThreadData_t> ThreadData;
 
-    WorkersContext() : NumThreads(1) {}
+    size_t NumOfQs; // number of queries in a batch
+    std::vector<GResultAgg_t> GResults; // will have NumOfQs size (1 position for each Q in a batch)
+
+    WorkersContext() {}
+    WorkersContext(const size_t nthreads) {
+        NumThreads = nthreads;
+        ThreadData.resize(nthreads);
+    }
 };
 
 //////////////////////////////////////
 
-// TODO Optimization - See above to use ngram [start, end) pairs and ngram IDs
 void outputResults(std::ostream& out, const std::vector<Result_t>& results) {
     if (results.empty()) {
         out << "-1\n";
@@ -144,13 +170,13 @@ void outputResults(std::ostream& out, const std::vector<Result_t>& results) {
             //out << "|" << std::move(std::string(ngram.start, ngram.end-ngram.start));
         }
     }
-	ss << "\n";
+    ss << "\n";
     out << ss.str();
 }
 
 std::vector<Result_t> queryEvaluationWithResults(NgramDB *ngdb, const OpQuery& op) {
-    size_t nthreads = 1;
-    int pidx = 0;
+    uint8_t nthreads = 1;
+    uint8_t pidx = 0;
 #ifdef USE_OPENMP
     nthreads = omp_get_num_threads();
     pidx = omp_get_thread_num();
@@ -159,17 +185,15 @@ std::vector<Result_t> queryEvaluationWithResults(NgramDB *ngdb, const OpQuery& o
     const auto decider = [=](const uint8_t byte){ return (byte % nthreads) == pidx; };
 
     const auto& doc = op.Doc;
-    const size_t opIdx = op.OpIdx;
-    size_t start{0}, end{0}, sz{doc.size()};
-
-    size_t startIdxEnd = sz;
+    const size_t opIdx{op.OpIdx}, sz{op.Doc.size()};
+    size_t start{0}, end{0};
 
     std::vector<Result_t> results;
 
     for (; start < sz; ) {
-		// find start of word
-		for (start = end; start < startIdxEnd && doc[start] == ' '; ++start) {}
-        if (start >= startIdxEnd) { break; }
+        // find start of word
+        for (start = end; start < sz && doc[start] == ' '; ++start) {}
+        if (start >= sz) { break; }
 
         if (decider(doc[start])) {
             auto cresult = ngdb->FindNgrams(doc, start, opIdx);
@@ -187,26 +211,10 @@ inline void queryEvaluation(NgramDB *ngdb, const OpQuery& op) {
     outputResults(std::cout, std::move(queryEvaluationWithResults(ngdb, op)));
 }
 
-void processUpdatesBatch(NgramDB *ngdb, WorkersContext *wctx, const std::vector<OpUpdate> *opUs) {
-    (void)wctx;
-    const size_t opsz = opUs->size();
-    for (size_t opidx=0; opidx<opsz; ++opidx) {
-        const auto& u = (*opUs)[opidx];
-        switch(u.OpType) {
-        case OpType_t::ADD:
-            ngdb->AddNgram(u.Ngram, u.OpIdx);
-            break;
-        case OpType_t::DEL:
-            ngdb->RemoveNgram(u.Ngram, u.OpIdx);
-            break;
-        default: abort();
-        }
-    }
-}
-
 uint64_t timeReading = 0;
 uint64_t tA{0}, tD{0}, tQ{0};
 bool readNextBatch(istream& in, NgramDB *ngdb, vector<Op_t>& Q, int& opIdx) {
+    (void)ngdb;
     auto start = timer.getChrono();
     std::string line;
     for (;;) {
@@ -222,19 +230,16 @@ bool readNextBatch(istream& in, NgramDB *ngdb, vector<Op_t>& Q, int& opIdx) {
         char type = line[0];
         switch (type) {
             case 'A':
-                //opUs.emplace_back(line.substr(2), opIdx, OpType_t::ADD);
                 Q.emplace_back(line.substr(2), opIdx, OpType_t::ADD);
                 //ngdb->AddNgram(line.substr(2), opIdx);
                 tA += timer.getChrono(startSingle);
                 break;
             case 'D':
-                //opUs.emplace_back(line.substr(2), opIdx, OpType_t::DEL);
                 Q.emplace_back(line.substr(2), opIdx, OpType_t::DEL);
                 //ngdb->RemoveNgram(line.substr(2), opIdx);
                 tD += timer.getChrono(startSingle);
                 break;
             case 'Q':
-                //opQs.emplace_back(line.substr(2), opIdx);
                 Q.emplace_back(line.substr(2), opIdx, OpType_t::Q);
                 //queryEvaluation(ngdb, std::move(OpQuery{line.substr(2), opIdx}));
                 tQ += timer.getChrono(startSingle);
@@ -250,15 +255,17 @@ bool readNextBatch(istream& in, NgramDB *ngdb, vector<Op_t>& Q, int& opIdx) {
     abort();
 }
 
-void queryBatchEvaluationSingle(NgramDB *ngdb, WorkersContext *wctx, const std::vector<Op_t>& Q) {
-    size_t nthreads = 1;
-    int pidx = 0;
+void queryBatchEvaluationSingle(WorkersContext *wctx, const std::vector<Op_t>& Q) {
+    uint8_t nthreads = 1;
+    uint8_t pidx = 0;
 #ifdef USE_OPENMP
     nthreads = omp_get_num_threads();
     pidx = omp_get_thread_num();
     //std::cerr << "pidx::" << pidx << " threads::" << nthreads <<std::endl;
 #endif
     const auto decider = [=](const uint8_t byte){ return (byte % nthreads) == pidx; };
+
+    const auto ngdb = wctx->ThreadData[pidx].Ngdb;
 
     for (const auto& cop : Q) {
         auto startSingle = timer.getChrono();
@@ -283,16 +290,16 @@ void queryBatchEvaluationSingle(NgramDB *ngdb, WorkersContext *wctx, const std::
         }
     }// processed all operations
 }
-void processWorkloadSingle(istream& in, NgramDB *ngdb, WorkersContext *wctx, int opIdx) {
+void processWorkloadSingle(istream& in, WorkersContext *wctx, int opIdx) {
     auto start = timer.getChrono();
 
     vector<Op_t> Q; Q.reserve(256);
 
     //@master - loop
-	for (;;) {
+    for (;;) {
 
         // @master
-        if (readNextBatch(in, ngdb, Q, opIdx)) {
+        if (readNextBatch(in, nullptr, Q, opIdx)) {
             break;
         }
 
@@ -300,7 +307,7 @@ void processWorkloadSingle(istream& in, NgramDB *ngdb, WorkersContext *wctx, int
             // @workers
             #pragma omp parallel
             {
-                queryBatchEvaluationSingle(ngdb, wctx, Q);
+                queryBatchEvaluationSingle(wctx, Q);
             }
 
             // @master
@@ -308,33 +315,33 @@ void processWorkloadSingle(istream& in, NgramDB *ngdb, WorkersContext *wctx, int
         }
 
     }// end of outermost loop - exit program
-	std::cerr << "proc::" << timer.getChrono(start) << ":" << tA << ":" << tD << ":" << tQ << " reads:" << timeReading << std::endl;
+    std::cerr << "proc::" << timer.getChrono(start) << ":" << tA << ":" << tD << ":" << tQ << " reads:" << timeReading << std::endl;
 }
-std::unique_ptr<NgramDB> readInitial(std::istream& in, int *outOpIdx) {
+static void readInitial(std::istream& in, WorkersContext *wctx, int *outOpIdx) {
     auto start = timer.getChrono();
 
-    auto ngdb = std::unique_ptr<NgramDB>(new NgramDB());
+    const size_t nthreads = wctx->NumThreads;
+
     int opIdx{0};
 
-	std::string line;
-	for (;;) {
-		if (!std::getline(in, line)) {
-			std::cerr << "error" << std::endl;
-			break;
-		}
+    std::string line;
+    for (;;) {
+        if (!std::getline(in, line)) {
+            std::cerr << "error" << std::endl;
+            break;
+        }
 
-		if (line == "S") {
-			std::cerr << "init::" << timer.getChrono(start) << std::endl;
+        if (line == "S") {
+            std::cerr << "init::" << timer.getChrono(start) << std::endl;
             std::cout << "R" << std::endl;
-			break;
-		}
+            break;
+        }
 
         opIdx += 1;
-		ngdb->AddNgram(line, opIdx);
-	}
+        wctx->ThreadData[line[0] % nthreads].Ngdb->AddNgram(line, opIdx);
+    }
 
     *outOpIdx = opIdx;
-	return std::move(ngdb);
 }
 
 int main(int argc, char**argv) {
@@ -350,18 +357,17 @@ int main(int argc, char**argv) {
     std::cerr << "affinity::" << omp_get_proc_bind() << " threads::" << threads <<std::endl;
 #endif
 
-	std::ios_base::sync_with_stdio(false);
+    std::ios_base::sync_with_stdio(false);
     setvbuf(stdin, NULL, _IOFBF, 1<<20);
 
     int opIdx;
     auto start = timer.getChrono();
 
-    std::unique_ptr<NgramDB> ngdb = readInitial(std::cin, &opIdx);
+    WorkersContext wctx(threads);
 
-    WorkersContext wctx;
-    wctx.NumThreads = threads;
+    readInitial(std::cin, &wctx, &opIdx);
 
-    processWorkloadSingle(std::cin, ngdb.get(), &wctx, opIdx);
+    processWorkloadSingle(std::cin, &wctx, opIdx);
 
     std::cerr << "main::" << timer.getChrono(start) << std::endl;
 }
