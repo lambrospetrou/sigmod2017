@@ -2,4 +2,8 @@
 
 DIR=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
 
-pushd $DIR/src && make ; popd
+if [ "$(uname)" == "Darwin" ]; then
+    pushd $DIR/src && make allmac ; popd
+else
+    pushd $DIR/src && make all ; popd
+fi
