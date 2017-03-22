@@ -846,11 +846,14 @@ namespace trie {
         }
     }
 
+
+    bool printed = false;
     struct TrieRoot_t {
         NodePtr Root;
         MemoryPool_t MemoryPool;
 
         TrieRoot_t() {
+            if (!printed) {
             std::cerr << sizeof(TrieNodeS_t) << "::" << sizeof(TrieNodeM_t) <<  "::" << sizeof(TrieNodeL_t) <<  "::" << sizeof(TrieNodeX_t) << "::" << sizeof(DataS<2>) << "::" << sizeof(DataS<16>) << "::" << sizeof(NodePtr) << std::endl;
 
             std::cerr << "S" << TYPE_S_MAX << " L" << TYPE_L_MAX << " X" << TYPE_X_DEPTH;
@@ -860,13 +863,15 @@ namespace trie {
             std::cerr << " MEM_X" << MEMORY_POOL_BLOCK_SIZE_X;
             std::cerr << std::endl;
 
+            printed = true;
+            }
             Root = _newTrieNodeL(&MemoryPool);
             if (!Root) { abort(); }
         }
         ~TrieRoot_t() {
             _takeAnalytics(Root);
             std::cerr << "growsM::" << GrowsM << " growsL::" << GrowsL << " #nodes::" << NumberOfNodes << std::endl;
-            std::cerr << "MAP::" << xTotal << "::" << xCh0 << "::" << xChMin << "::" << xChMax << "::" << (xChTotal*1.0/xTotal) << std::endl;
+            //std::cerr << "MAP::" << xTotal << "::" << xCh0 << "::" << xChMin << "::" << xChMax << "::" << (xChTotal*1.0/xTotal) << std::endl;
         }
     };
 
