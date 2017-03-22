@@ -46,8 +46,8 @@ namespace trie {
     constexpr size_t TYPE_L_MAX = 256;
     constexpr size_t TYPE_X_DEPTH = 24;
 
-    constexpr size_t MEMORY_POOL_BLOCK_SIZE_S = 1<<20;
-    constexpr size_t MEMORY_POOL_BLOCK_SIZE_M = 1<<15;
+    constexpr size_t MEMORY_POOL_BLOCK_SIZE_S = 1<<25;
+    constexpr size_t MEMORY_POOL_BLOCK_SIZE_M = 1<<20;
     constexpr size_t MEMORY_POOL_BLOCK_SIZE_L = 1<<10;
     constexpr size_t MEMORY_POOL_BLOCK_SIZE_X = 1<<10;
 
@@ -60,46 +60,6 @@ namespace trie {
     struct TrieNodeM_t;
     struct TrieNodeX_t;
     union NodePtr;
-
-    //////////////////////////////////////////
-
-
-    /////////////////////////////////////////
-
-    struct RecordHistory {
-        /*
-        struct Record_t {
-            size_t OpIdx;
-            OpType Type; // 0-Add, 1-Delete
-
-            Record_t() {}
-            Record_t(size_t idx, OpType t) : OpIdx(idx), Type(t) {}
-        };
-        std::vector<Record_t> Records; // allow parallel batched queries
-
-        inline void MarkAdd(size_t opIdx) { Records.emplace_back(opIdx, OpType::ADD); }
-        inline void MarkDel(size_t opIdx) { Records.emplace_back(opIdx, OpType::DEL); }
-        inline bool IsValid(size_t opIdx) const {
-            if (Records.empty()) { return false; }
-            const size_t rsz = Records.size();
-
-            if (Records[rsz-1].OpIdx < opIdx) {
-                return Records[rsz-1].Type == OpType::ADD;
-            }
-            for (size_t ridx=rsz-1; ridx>0; ridx--) {
-                if (Records[ridx-1].OpIdx < opIdx) {
-                    return Records[ridx-1].Type == OpType::ADD;
-                }
-            }
-            return false;
-        }
-        */
-
-        OpType state{OpType::DEL};
-        inline void MarkAdd(size_t opIdx) { state = OpType::ADD; }
-        inline void MarkDel(size_t opIdx) { state = OpType::DEL; }
-        inline bool IsValid(size_t opIdx) const { return state == OpType::ADD; }
-    };
 
     /////////////////////////////////////////
     union NodePtr {
@@ -157,7 +117,7 @@ namespace trie {
     };
     struct TrieNodeX_t {
         const NodeType Type = NodeType::X;
-        RecordHistory State;
+        bool Valid;
 
         // TODO Optimization
         // TODO Create a custom String class that does not copy the contents of the char* for each key
@@ -579,8 +539,6 @@ namespace trie {
         NodePtr parent = (TrieNodeS_t*)nullptr;
         NodePtr previous = (TrieNodeS_t*)nullptr;
         for (size_t bidx = 0; bidx < bsz; bidx++) {
-            const uint8_t cb = bs[bidx];
-
             previous = cNode;
 
             switch(cNode.L->Type) {
@@ -668,8 +626,6 @@ namespace trie {
         bool done = false;
 
         for (size_t bidx = 0; bidx < bsz; bidx++) {
-            const uint8_t cb = bs[bidx];
-
             switch(cNode.L->Type) {
                 case NodeType::S:
                     {
@@ -706,7 +662,7 @@ namespace trie {
         return;
     }
 
-    inline static std::vector<std::pair<size_t, uint64_t>> _findAllTypeX(TrieNodeX_t *cNode, std::vector<std::pair<size_t,uint64_t>>& results, const char*s, size_t bidx, const size_t bsz, int opIdx) {
+    inline static std::vector<std::pair<size_t, uint64_t>> _findAllTypeX(TrieNodeX_t *cNode, std::vector<std::pair<size_t,uint64_t>>& results, const char*s, size_t bidx, const size_t bsz) {
 
         // 1. Find the next word
         // 2. Fetch the range of ngrams matching that word (lower_bound/equal_range)
@@ -782,7 +738,7 @@ namespace trie {
     }
 
     // @param s The whole doc prefix that we need to find ALL NGRAMS matching
-    static std::vector<std::pair<size_t, uint64_t>> FindAll(NodePtr cNode, const char *s, const size_t docSize, int opIdx) {
+    static std::vector<std::pair<size_t, uint64_t>> FindAll(NodePtr cNode, const char *s, const size_t docSize) {
         const size_t bsz = docSize;
         const uint8_t* bs = reinterpret_cast<const uint8_t*>(s);
 
@@ -813,7 +769,7 @@ namespace trie {
                     }
                 case NodeType::X:
                     {
-                        return _findAllTypeX(cNode.X, results, s, bidx, bsz, opIdx);
+                        return _findAllTypeX(cNode.X, results, s, bidx, bsz);
                         abort();
                     }
                 default:
@@ -895,7 +851,7 @@ namespace trie {
         MemoryPool_t MemoryPool;
 
         TrieRoot_t() {
-            std::cerr << sizeof(TrieNodeS_t) << "::" << sizeof(TrieNodeM_t) <<  "::" << sizeof(TrieNodeL_t) <<  "::" << sizeof(TrieNodeX_t) << "::" << sizeof(DataS<2>) << "::" << sizeof(DataS<16>) << "::" << sizeof(RecordHistory) << "::" << sizeof(NodePtr) << std::endl;
+            std::cerr << sizeof(TrieNodeS_t) << "::" << sizeof(TrieNodeM_t) <<  "::" << sizeof(TrieNodeL_t) <<  "::" << sizeof(TrieNodeX_t) << "::" << sizeof(DataS<2>) << "::" << sizeof(DataS<16>) << "::" << sizeof(NodePtr) << std::endl;
 
             std::cerr << "S" << TYPE_S_MAX << " L" << TYPE_L_MAX << " X" << TYPE_X_DEPTH;
             std::cerr << " MEM_S" << MEMORY_POOL_BLOCK_SIZE_S;
@@ -914,12 +870,12 @@ namespace trie {
         }
     };
 
-    inline static void AddNgram(TrieRoot_t *trie, const std::string& s, int opIdx) {
+    inline static void AddNgram(TrieRoot_t *trie, const std::string& s) {
         //std::cerr << "a::" << s << std::endl;
-        auto cNode = cy::trie::AddString(&trie->MemoryPool, trie->Root, s);
+        cy::trie::AddString(&trie->MemoryPool, trie->Root, s);
     }
 
-    inline static void RemoveNgram(TrieRoot_t*trie, const std::string& s, int opIdx) {
+    inline static void RemoveNgram(TrieRoot_t*trie, const std::string& s) {
         //std::cerr << "rem::" << s << std::endl;
         cy::trie::DelString(trie->Root, s);
     }
