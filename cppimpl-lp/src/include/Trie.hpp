@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <string>
+#include <cstring>
 #include <algorithm>
 #include <map>
 #include <cstring>
@@ -102,7 +103,7 @@ namespace trie {
         std::string Suffix;
 
         // 40 bytes so far. To be 16-bit aligned for SIMD we need to pad some bytes
-        uint8_t padding[8];
+        //uint8_t padding[8];
 
         DataS<TYPE_M_MAX> DtM;
     } ALIGNED_16;
@@ -351,7 +352,7 @@ namespace trie {
         for (;;) {
             if (cidx >= csz) { return nullptr; }
             if (childrenIndex[cidx] == cb) {
-                return sNode->DtS.Children()[cidx];;
+                return sNode->DtS.Children()[cidx];
             }
             cidx++;
         }
@@ -532,7 +533,7 @@ namespace trie {
     }
 
     // @param s The whole ngram
-    static NodePtr AddString(MemoryPool_t *mem, NodePtr cNode, const std::string& s) {
+    static void AddString(MemoryPool_t *mem, NodePtr cNode, const std::string& s) {
         const size_t bsz = s.size();
         const uint8_t* bs = reinterpret_cast<const uint8_t*>(s.data());
         bool done = false;
@@ -565,19 +566,17 @@ namespace trie {
                         if (it == xNode->ChildrenMap.end()) {
                             it = xNode->ChildrenMap.insert(it, {std::move(key), _newTrieNode(mem)});
                         }
-                        cNode = it->second; bidx = bsz;
+                        done = true;
                         break;
                         abort();
                     }
                 default:
                     abort();
             }
-            if (done) { break; }
+            if (done) { return; }
 
             parent = previous;
         }
-
-        return cNode;
     }
 
     static inline NodePtr _doDelString(NodePtr cuNode, const uint8_t*bs, const size_t bsz, const size_t bidx, bool *done, SearchFunc_t _doSingleByteSearch) {
@@ -647,16 +646,14 @@ namespace trie {
                         const auto xNode = cNode.X;
                         const std::string key(s.substr(bidx));
                         const auto it = xNode->ChildrenMap.find(key);
-                        if (it == xNode->ChildrenMap.end()) {
-                            return;
-                        }
-                        cNode = it->second; bidx = bsz;
+                        if (it == xNode->ChildrenMap.end()) { return; }
+                        done = true;
                         break;
                     }
                 default:
                     abort();
             }
-            if (done) { break; }
+            if (done) { return; }
         }
 
         return;
@@ -723,12 +720,10 @@ namespace trie {
             return _doSingleByteSearch(cNode, cb);
         } else {
             // the doc has to match the whole ngram suffix
-            auto suffix = reinterpret_cast<const uint8_t*>(cNode->Suffix.data());
+            const auto suffix = reinterpret_cast<const uint8_t*>(cNode->Suffix.data());
             const auto sufsz = cNode->Suffix.size();
             if (sufsz > bsz-bidx) { return nullptr; }
-            for (size_t sufidx=0; sufidx<sufsz; sufidx++) {
-                if (suffix[sufidx] != bs[bidx+sufidx]) { return nullptr; }
-            }
+            if (std::memcmp(suffix, bs+bidx, sufsz) != 0) { return nullptr; }
             const size_t nbidx = bidx + sufsz;
             if (nbidx >= bsz || bs[nbidx] == ' ') {
                 results.emplace_back(nbidx, (uint64_t)suffix);

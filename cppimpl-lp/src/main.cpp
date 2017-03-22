@@ -40,23 +40,6 @@ using namespace std;
 
 enum OpType_t : uint8_t { ADD = 0, DEL = 1, Q = 2 };
 
-/*
-struct OpQuery {
-    std::string Doc;
-    int OpIdx;
-
-    OpQuery() {}
-    OpQuery(string d, int idx) : Doc(d), OpIdx(idx) {}
-};
-struct OpUpdate {
-    std::string Ngram;
-    int OpIdx;
-    OpType_t OpType;
-
-    OpUpdate() {}
-    OpUpdate(string ngram, int idx, OpType_t t) : Ngram(std::move(ngram)), OpIdx(idx), OpType(t) {}
-};
-*/
 struct Op_t {
     std::string Line;
     OpType_t OpType;
@@ -82,26 +65,23 @@ struct NgramDB {
 
     NgramDB() {}
 
-    void AddNgram(const std::string& s) {
+    inline void AddNgram(const std::string& s) {
         //std::cerr << "a::" << s << std::endl;
         cy::trie::AddNgram(&Trie, s);
     }
 
-    void RemoveNgram(const std::string& s) {
+    inline void RemoveNgram(const std::string& s) {
         //std::cerr << "rem::" << s << std::endl;
         cy::trie::RemoveNgram(&Trie, s);
     }
 
     // @param doc The part of the doc to find all matching ngrams that have doc (or part of doc) as their prefix.
-    std::vector<Result_t> FindNgrams(const std::string& doc, size_t docStart) {
-        std::vector<Result_t> results;
+    inline void FindNgrams(const std::string& doc, size_t docStart, std::vector<Result_t>& results) {
         const char*docStr = doc.data();
         const auto& ngramResults = cy::trie::FindAll(Trie.Root, doc.data()+docStart, doc.size()-docStart);
         for (const auto& ngramPos : ngramResults) {
             results.emplace_back(docStr+docStart, docStr+docStart+ngramPos.first, ngramPos.second);
         }
-
-        return std::move(results);
     }
 };
 
@@ -138,6 +118,35 @@ struct WorkersContext {
 };
 
 //////////////////////////////////////
+/*
+#define MULT 31
+static inline bool decider(const char*p, const size_t nthreads, const size_t pidx) {
+    size_t h = 0;
+    for(;*p && *p != ' '; p++) { h = MULT * h + *p; }
+    return (h % nthreads) == pidx;
+}
+static inline size_t deciderIdx(const char*p, const size_t nthreads) {
+    size_t h = 0;
+    for(;*p && *p != ' '; p++) { h = MULT * h + *p; }
+    return h % nthreads;
+}
+*/
+/*
+static inline bool decider(const char*p, const size_t nthreads, const size_t pidx) {
+    const size_t h = (*p % (nthreads<<1));
+    return (h>>1) == pidx;
+}
+static inline size_t deciderIdx(const char*p, const size_t nthreads) {
+    return (*p % (nthreads<<1))>>1;
+}
+*/
+// Single byte hash assignment
+static inline bool decider(const char*p, const size_t nthreads, const size_t pidx) {
+    return (*p % nthreads) == pidx;
+}
+static inline size_t deciderIdx(const char*p, const size_t nthreads) {
+    return *p % nthreads;
+}
 
 void outputResults(std::ostream& out, const std::vector<Result_t>& results) {
     if (results.empty()) {
@@ -170,7 +179,7 @@ void outputResults(std::ostream& out, const std::vector<Result_t>& results) {
 }
 
 //std::vector<Result_t> queryEvaluationWithResults(NgramDB *ngdb, const OpQuery& op) {
-std::vector<Result_t> queryEvaluationWithResults(NgramDB *ngdb, const std::string& Doc) {
+std::vector<Result_t> queryEvaluationWithResults(NgramDB *ngdb, const std::string& doc) {
     uint8_t nthreads = 1;
     uint8_t pidx = 0;
 #ifdef USE_OPENMP
@@ -178,12 +187,11 @@ std::vector<Result_t> queryEvaluationWithResults(NgramDB *ngdb, const std::strin
     pidx = omp_get_thread_num();
     //std::cerr << "pidx::" << pidx << " threads::" << nthreads <<std::endl;
 #endif
-    const auto decider = [=](const uint8_t byte){ return (byte % nthreads) == pidx; };
+    //const auto decider = [=](const uint8_t byte){ return (byte % nthreads) == pidx; };
 
-    const auto& doc = Doc;
-    const size_t sz{Doc.size()};
+    const auto docPtr = doc.data();
+    const size_t sz{doc.size()};
     size_t start{0}, end{0};
-
     std::vector<Result_t> results;
 
     for (; start < sz; ) {
@@ -191,11 +199,9 @@ std::vector<Result_t> queryEvaluationWithResults(NgramDB *ngdb, const std::strin
         for (start = end; start < sz && doc[start] == ' '; ++start) {}
         if (start >= sz) { break; }
 
-        if (decider(doc[start])) {
-            auto cresult = ngdb->FindNgrams(doc, start);
-            if (!cresult.empty()) {
-                results.insert(results.end(), cresult.begin(), cresult.end());
-            }
+        //if (decider(doc[start])) {
+        if (decider(docPtr + start, nthreads, pidx)) {
+            ngdb->FindNgrams(doc, start, results);
         }
 
         for (end = start; end < sz && doc[end] != ' '; ++end) {}
@@ -285,7 +291,6 @@ void queryBatchEvaluationSingle(WorkersContext *wctx, const std::vector<Op_t>& Q
     pidx = omp_get_thread_num();
     //std::cerr << "pidx::" << (int)pidx << " threads::" << (int)nthreads <<std::endl;
 #endif
-    const auto decider = [=](const uint8_t byte){ return (byte % nthreads) == pidx; };
 
     const auto ngdb = wctx->ThreadData[pidx].Ngdb;
 
@@ -296,13 +301,13 @@ void queryBatchEvaluationSingle(WorkersContext *wctx, const std::vector<Op_t>& Q
 
         switch(cop.OpType) {
         case OpType_t::ADD:
-            if (decider(cop.Line[0])) {
+            if (decider(cop.Line.data(), nthreads, pidx)) {
                 ngdb->AddNgram(cop.Line);
             }
             tA += timer.getChrono(startSingle);
             break;
         case OpType_t::DEL:
-            if (decider(cop.Line[0])) {
+            if (decider(cop.Line.data(), nthreads, pidx)) {
                 ngdb->RemoveNgram(cop.Line);
             }
             tD += timer.getChrono(startSingle);
@@ -359,7 +364,7 @@ static void readInitial(std::istream& in, WorkersContext *wctx) {
             break;
         }
 
-        wctx->ThreadData[line[0] % nthreads].Ngdb->AddNgram(line);
+        wctx->ThreadData[deciderIdx(line.data(), nthreads)].Ngdb->AddNgram(line);
     }
 }
 
