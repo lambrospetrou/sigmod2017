@@ -119,21 +119,17 @@ struct ThreadData_t {
 };
 
 struct GResult_t {
-    size_t DocIdx;
     std::vector<Result_t> Results;
     size_t ThreadsDone;
 
-    GResult_t() : DocIdx(0), ThreadsDone(0) {}
+    GResult_t() : ThreadsDone(0) {}
 };
-
-typedef std::vector<GResult_t> GResultAgg_t;
 
 struct WorkersContext {
     size_t NumThreads;
     std::vector<ThreadData_t> ThreadData;
 
-    size_t NumOfQs; // number of queries in a batch
-    std::vector<GResultAgg_t> GResults; // will have NumOfQs size (1 position for each Q in a batch)
+    std::vector<GResult_t> GResults; // will have NumOfQs size (1 position for each Q in a batch)
 
     WorkersContext() {}
     WorkersContext(const size_t nthreads) {
@@ -174,7 +170,8 @@ void outputResults(std::ostream& out, const std::vector<Result_t>& results) {
     out << ss.str();
 }
 
-std::vector<Result_t> queryEvaluationWithResults(NgramDB *ngdb, const OpQuery& op) {
+//std::vector<Result_t> queryEvaluationWithResults(NgramDB *ngdb, const OpQuery& op) {
+std::vector<Result_t> queryEvaluationWithResults(NgramDB *ngdb, const std::string& Doc) {
     uint8_t nthreads = 1;
     uint8_t pidx = 0;
 #ifdef USE_OPENMP
@@ -184,8 +181,8 @@ std::vector<Result_t> queryEvaluationWithResults(NgramDB *ngdb, const OpQuery& o
 #endif
     const auto decider = [=](const uint8_t byte){ return (byte % nthreads) == pidx; };
 
-    const auto& doc = op.Doc;
-    const size_t opIdx{op.OpIdx}, sz{op.Doc.size()};
+    const auto& doc = Doc;
+    const size_t sz{Doc.size()};
     size_t start{0}, end{0};
 
     std::vector<Result_t> results;
@@ -196,7 +193,7 @@ std::vector<Result_t> queryEvaluationWithResults(NgramDB *ngdb, const OpQuery& o
         if (start >= sz) { break; }
 
         if (decider(doc[start])) {
-            auto cresult = ngdb->FindNgrams(doc, start, opIdx);
+            auto cresult = ngdb->FindNgrams(doc, start, -1);
             if (!cresult.empty()) {
                 results.insert(results.end(), cresult.begin(), cresult.end());
             }
@@ -207,16 +204,42 @@ std::vector<Result_t> queryEvaluationWithResults(NgramDB *ngdb, const OpQuery& o
 
     return std::move(results);
 }
+/*
 inline void queryEvaluation(NgramDB *ngdb, const OpQuery& op) {
     outputResults(std::cout, std::move(queryEvaluationWithResults(ngdb, op)));
+}
+*/
+inline void queryEvaluationWithAggregation(NgramDB *ngdb, WorkersContext *wctx, const size_t qIdx, const std::string& Doc) {
+    auto tresults = std::move(queryEvaluationWithResults(ngdb, Doc));
+    bool iShouldPrint = false;
+    auto& gresults = wctx->GResults[qIdx].Results;
+
+    #pragma omp critical
+    {
+        gresults.insert(gresults.end(), tresults.begin(), tresults.end());
+        iShouldPrint = ++(wctx->GResults[qIdx].ThreadsDone) == wctx->NumThreads;
+    }
+
+    if (iShouldPrint) {
+        //std::cerr << "printing pidx::" << omp_get_thread_num() << " threads::" << omp_get_num_threads() <<std::endl;
+        // sort the results based on position in the doc and then print
+        std::sort(gresults.begin(), gresults.end(), [](const Result_t& l, const Result_t& r) {
+            if (l.start < r.start) { return true; }
+            if (l.start > r.start) { return false; }
+            return l.end < r.end;
+        });
+        outputResults(std::cout, gresults);
+    }
 }
 
 uint64_t timeReading = 0;
 uint64_t tA{0}, tD{0}, tQ{0};
-bool readNextBatch(istream& in, NgramDB *ngdb, vector<Op_t>& Q, int& opIdx) {
-    (void)ngdb;
+bool readNextBatch(istream& in, WorkersContext *wctx, vector<Op_t>& Q, int& opIdx) {
     auto start = timer.getChrono();
     std::string line;
+
+    size_t numOfQs = 0;
+
     for (;;) {
         if (!std::getline(in, line)) {
             if (!in.eof()) { std::cerr << "Error" << std::endl; }
@@ -241,10 +264,12 @@ bool readNextBatch(istream& in, NgramDB *ngdb, vector<Op_t>& Q, int& opIdx) {
                 break;
             case 'Q':
                 Q.emplace_back(line.substr(2), opIdx, OpType_t::Q);
+                numOfQs++;
                 //queryEvaluation(ngdb, std::move(OpQuery{line.substr(2), opIdx}));
                 tQ += timer.getChrono(startSingle);
                 break;
             case 'F':
+                wctx->GResults.resize(0); wctx->GResults.resize(numOfQs);
                 timeReading += timer.getChrono(start);
                 return false;
                 break;
@@ -254,18 +279,19 @@ bool readNextBatch(istream& in, NgramDB *ngdb, vector<Op_t>& Q, int& opIdx) {
     // should never come here!
     abort();
 }
-
 void queryBatchEvaluationSingle(WorkersContext *wctx, const std::vector<Op_t>& Q) {
     uint8_t nthreads = 1;
     uint8_t pidx = 0;
 #ifdef USE_OPENMP
     nthreads = omp_get_num_threads();
     pidx = omp_get_thread_num();
-    //std::cerr << "pidx::" << pidx << " threads::" << nthreads <<std::endl;
+    //std::cerr << "pidx::" << (int)pidx << " threads::" << (int)nthreads <<std::endl;
 #endif
     const auto decider = [=](const uint8_t byte){ return (byte % nthreads) == pidx; };
 
     const auto ngdb = wctx->ThreadData[pidx].Ngdb;
+
+    size_t qidx = 0;
 
     for (const auto& cop : Q) {
         auto startSingle = timer.getChrono();
@@ -284,7 +310,8 @@ void queryBatchEvaluationSingle(WorkersContext *wctx, const std::vector<Op_t>& Q
             tD += timer.getChrono(startSingle);
             break;
         case OpType_t::Q:
-            queryEvaluation(ngdb, std::move(OpQuery{cop.Line, cop.OpIdx}));
+            //queryEvaluation(ngdb, std::move(OpQuery{cop.Line, cop.OpIdx}));
+            queryEvaluationWithAggregation(ngdb, wctx, qidx++, cop.Line);
             tQ += timer.getChrono(startSingle);
             break;
         }
@@ -299,13 +326,13 @@ void processWorkloadSingle(istream& in, WorkersContext *wctx, int opIdx) {
     for (;;) {
 
         // @master
-        if (readNextBatch(in, nullptr, Q, opIdx)) {
+        if (readNextBatch(in, wctx, Q, opIdx)) {
             break;
         }
 
         if (!Q.empty()) {
             // @workers
-            #pragma omp parallel
+            #pragma omp parallel shared(wctx, Q)
             {
                 queryBatchEvaluationSingle(wctx, Q);
             }

@@ -46,8 +46,8 @@ namespace trie {
     constexpr size_t TYPE_L_MAX = 256;
     constexpr size_t TYPE_X_DEPTH = 24;
 
-    constexpr size_t MEMORY_POOL_BLOCK_SIZE_S = 1<<25;
-    constexpr size_t MEMORY_POOL_BLOCK_SIZE_M = 1<<20;
+    constexpr size_t MEMORY_POOL_BLOCK_SIZE_S = 1<<20;
+    constexpr size_t MEMORY_POOL_BLOCK_SIZE_M = 1<<15;
     constexpr size_t MEMORY_POOL_BLOCK_SIZE_L = 1<<10;
     constexpr size_t MEMORY_POOL_BLOCK_SIZE_X = 1<<10;
 
@@ -140,7 +140,7 @@ namespace trie {
         const NodeType Type = NodeType::M;
         bool Valid;
         std::string Suffix;
-        
+
         // 40 bytes so far. To be 16-bit aligned for SIMD we need to pad some bytes
         uint8_t padding[8];
 
@@ -358,7 +358,7 @@ namespace trie {
     // TODO we know that we will not grow since it is new nodes being added!!!
     typedef NodePtr(*AddFunc_t)(NodePtr, const uint8_t, NodePtr, const uint8_t, NodePtr, MemoryPool_t*);
     typedef NodePtr(*SearchFunc_t)(NodePtr, const uint8_t);
-   
+
     // It might change the *cNode if this node needs to grow to accommodate the new node.
     // @return the added node - nextNode
     static inline NodePtr _doSingleByteAddS(NodePtr cNode, const uint8_t cb, NodePtr nextNode, const uint8_t pb, NodePtr parent, MemoryPool_t *mem) {
@@ -590,7 +590,7 @@ namespace trie {
                         break;
                     }
                 case NodeType::M:
-                    { 
+                    {
                         cNode = _doAddString(mem, cNode, bs, bsz, bidx, parent, &done, _doSingleByteAddM, _doSingleByteSearchM);
                         break;
                     }
@@ -682,7 +682,7 @@ namespace trie {
                         break;
                     }
                 case NodeType::L:
-                    { 
+                    {
                         cNode = _doDelString(cNode, bs, bsz, bidx, &done, _doSingleByteSearchL);
                         break;
                     }
@@ -806,7 +806,7 @@ namespace trie {
                         break;
                     }
                 case NodeType::L:
-                    { 
+                    {
                         cNode = _doFindAll(cNode, cb, bsz, bs, bidx, results, _doSingleByteSearchL);
                         if (!cNode) { return std::move(results); }
                         break;
