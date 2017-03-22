@@ -262,7 +262,7 @@ namespace trie {
         }
         return _newTrieNodeX(mem);
 #else
-        return _newTrieNodeM(mem);
+        return _newTrieNodeS(mem);
 #endif
     }
 
@@ -365,6 +365,44 @@ namespace trie {
     typedef NodePtr(*AddFunc_t)(NodePtr, const uint8_t, NodePtr, const uint8_t, NodePtr, MemoryPool_t*);
     typedef NodePtr(*SearchFunc_t)(NodePtr, const uint8_t);
    
+    // It might change the *cNode if this node needs to grow to accommodate the new node.
+    // @return the added node - nextNode
+    static inline NodePtr _doSingleByteAddS(NodePtr cNode, const uint8_t cb, NodePtr nextNode, const uint8_t pb, NodePtr parent, MemoryPool_t *mem) {
+        const auto sNode = cNode.S;
+        const auto childrenIndex = sNode->DtS.ChildrenIndex;
+        const size_t csz = sNode->DtS.Size;
+        size_t cidx = 0;
+        for (;;) {
+            if (cidx >= csz) {
+                if (csz == TYPE_S_MAX) {
+                    return _growTypeSWith(mem, sNode, parent, pb, cb, nextNode);
+                } else {
+                    sNode->DtS.Children()[sNode->DtS.Size++] = nextNode;
+                    childrenIndex[csz] = cb;
+                    return nextNode;
+                }
+            }
+            if (childrenIndex[cidx] == cb) {
+                return sNode->DtS.Children()[cidx];
+            }
+            cidx++;
+        }
+        return nullptr;
+    }
+    static inline NodePtr _doSingleByteSearchS(NodePtr cNode, const uint8_t cb) {
+        const auto sNode = cNode.S;
+        const auto childrenIndex = sNode->DtS.ChildrenIndex;
+        const size_t csz = sNode->DtS.Size;
+        size_t cidx = 0;
+        for (;;) {
+            if (cidx >= csz) { return nullptr; }
+            if (childrenIndex[cidx] == cb) {
+                return sNode->DtS.Children()[cidx];;
+            }
+            cidx++;
+        }
+        return nullptr;
+    }
     // It might change the *cNode if this node needs to grow to accommodate the new node.
     // @return the added node - nextNode
     static inline NodePtr _doSingleByteAddM(NodePtr cNode, const uint8_t cb, NodePtr nextNode, const uint8_t pb, NodePtr parent, MemoryPool_t *mem) {
@@ -478,7 +516,7 @@ namespace trie {
                 nextNode = _doSingleByteAdd(nextNode, sufbs[0], _newTrieNode(mem, bidx), pb, parent, mem); // Generic call
             }
             for (size_t sidx=1; sidx<common; ++sidx) {
-                nextNode = _doSingleByteAddM(nextNode, sufbs[sidx], _newTrieNode(mem, bidx+sidx), pb, parent, mem);
+                nextNode = _doSingleByteAddS(nextNode, sufbs[sidx], _newTrieNode(mem, bidx+sidx), pb, parent, mem);
             }
             nextNode.S->Valid = true; // this is for the existing ngram
             nextNode.S->Suffix = std::move(std::string((char*)bs+bidx+common, (char*)bs+bsz)); // the new ngram
@@ -499,12 +537,12 @@ namespace trie {
             nextNode = _doSingleByteAdd(nextNode, sufbs[0], _newTrieNode(mem, bidx), pb, parent, mem); // Generic call
         }
         for (size_t sidx=1; sidx<common; ++sidx) {
-            nextNode = _doSingleByteAddM(nextNode, sufbs[sidx], _newTrieNode(mem, bidx+sidx), pb, parent, mem);
+            nextNode = _doSingleByteAddS(nextNode, sufbs[sidx], _newTrieNode(mem, bidx+sidx), pb, parent, mem);
         }
         // add the remaining of the existing ngram
         NodePtr newNode;
         if (common > 0) {
-            newNode = _doSingleByteAddM(nextNode, sufbs[common], _newTrieNode(mem, bidx+common), pb, parent, mem);
+            newNode = _doSingleByteAddS(nextNode, sufbs[common], _newTrieNode(mem, bidx+common), pb, parent, mem);
         } else {
             newNode = _doSingleByteAdd(nextNode, sufbs[common], _newTrieNode(mem, bidx+common), pb, parent, mem); // Generic call
         }
@@ -518,7 +556,7 @@ namespace trie {
         // add the remaining of the new ngram
         if (bidx+common < bsz) {
             if (common > 0) {
-                newNode = _doSingleByteAddM(nextNode, bs[bidx+common], _newTrieNode(mem, bidx+common), pb, parent, mem);
+                newNode = _doSingleByteAddS(nextNode, bs[bidx+common], _newTrieNode(mem, bidx+common), pb, parent, mem);
             } else {
                 newNode = _doSingleByteAdd(nextNode, bs[bidx+common], _newTrieNode(mem, bidx+common), pb, parent, mem); // Generic call
             }
@@ -554,51 +592,11 @@ namespace trie {
             switch(cNode.L->Type) {
                 case NodeType::S:
                     {
-                        const auto sNode = cNode.S;
-                        const auto childrenIndex = sNode->DtS.ChildrenIndex;
-                        const size_t csz = sNode->DtS.Size;
-                        size_t cidx = 0;
-                        for (;;) {
-                            if (cidx >= csz) {
-                                if (csz == TYPE_S_MAX) {
-                                    cNode = _growTypeSWith(mem, sNode, parent, bs[bidx-1], cb, _newTrieNode(mem, bidx));
-                                } else {
-                                    sNode->DtS.Children()[sNode->DtS.Size++] = _newTrieNode(mem, bidx);
-                                    childrenIndex[csz] = cb;
-                                    cNode = sNode->DtS.Children()[csz];
-                                }
-                                break;
-                            }
-                            if (childrenIndex[cidx] == cb) {
-                                cNode = sNode->DtS.Children()[cidx];
-                                break;
-                            }
-                            cidx++;
-                        }
+                        cNode = _doAddString(mem, cNode, bs, bsz, bidx, parent, &done, _doSingleByteAddS, _doSingleByteSearchS);
                         break;
                     }
                 case NodeType::M:
-                    {
-                        /*
-                        const auto mNode = cNode.M;
-                        const size_t csz = mNode->DtM.Size;
-
-                        auto key =_mm_set1_epi8(cb);
-                        auto cmp =_mm_cmpeq_epi8(key, *(__m128i*)mNode->DtM.ChildrenIndex);
-                        auto mask=(1<<csz)-1;
-                        auto bitfield=_mm_movemask_epi8(cmp)&mask;
-                        if (!bitfield) {
-                            if (csz == TYPE_M_MAX) {
-                                cNode = _growTypeMWith(mem, mNode, parent, bs[bidx-1], cb);
-                            } else {
-                                mNode->DtM.Children()[mNode->DtM.Size++] = _newTrieNode(mem, bidx);
-                                mNode->DtM.ChildrenIndex[csz] = cb;
-                                cNode = mNode->DtM.Children()[csz];
-                            }
-                        } else {
-                            cNode = mNode->DtM.Children()[__builtin_ctz(bitfield)];
-                        }
-                        */
+                    { 
                         cNode = _doAddString(mem, cNode, bs, bsz, bidx, parent, &done, _doSingleByteAddM, _doSingleByteSearchM);
                         break;
                     }
@@ -681,38 +679,11 @@ namespace trie {
             switch(cNode.L->Type) {
                 case NodeType::S:
                     {
-                        const auto sNode = cNode.S;
-                        const auto childrenIndex = sNode->DtS.ChildrenIndex;
-                        const size_t csz = sNode->DtS.Size;
-                        size_t cidx = 0;
-                        for (;;) {
-                            if (cidx >= csz) { return; }
-                            if (childrenIndex[cidx] == cb) {
-                                cNode = sNode->DtS.Children()[cidx];
-                                break;
-                            }
-                            cidx++;
-                        }
-
+                        cNode = _doDelString(cNode, bs, bsz, bidx, &done, _doSingleByteSearchS);
                         break;
                     }
                 case NodeType::M:
                     {
-                        /*
-                        const auto mNode = cNode.M;
-                        const size_t csz = mNode->DtM.Size;
-
-                        auto key =_mm_set1_epi8(cb);
-                        auto cmp =_mm_cmpeq_epi8(key, *(__m128i*)mNode->DtM.ChildrenIndex);
-                        auto mask=(1<<csz)-1;
-                        auto bitfield=_mm_movemask_epi8(cmp)&mask;
-
-                        if (!bitfield) {
-                            return;
-                        }
-                        cNode = mNode->DtM.Children()[__builtin_ctz(bitfield)];
-                        break;
-                        */
                         cNode = _doDelString(cNode, bs, bsz, bidx, &done, _doSingleByteSearchM);
                         break;
                     }
@@ -830,36 +801,12 @@ namespace trie {
             switch(cNode.L->Type) {
                 case NodeType::S:
                     {
-                        const auto sNode = cNode.S;
-                        const auto childrenIndex = sNode->DtS.ChildrenIndex;
-                        const size_t csz = sNode->DtS.Size;
-                        size_t cidx = 0;
-                        for (;;) {
-                            if (cidx >= csz) { return std::move(results); }
-                            if (childrenIndex[cidx] == cb) {
-                                cNode = sNode->DtS.Children()[cidx];
-                                break;
-                            }
-                            cidx++;
-                        }
+                        cNode = _doFindAll(cNode, cb, bsz, bs, bidx, results, _doSingleByteSearchS);
+                        if (!cNode) { return std::move(results); }
                         break;
                     }
                 case NodeType::M:
                     {
-                        /*
-                        const auto mNode = cNode.M;
-                        const size_t csz = mNode->DtM.Size;
-
-                        auto key =_mm_set1_epi8(cb);
-                        auto cmp =_mm_cmpeq_epi8(key, *(__m128i*)mNode->DtM.ChildrenIndex);
-                        auto mask=(1<<csz)-1;
-                        auto bitfield=_mm_movemask_epi8(cmp)&mask;
-                        if (!bitfield) {
-                            return std::move(results);
-                        }
-                        cNode = mNode->DtM.Children()[__builtin_ctz(bitfield)];
-                        break;
-                        */
                         cNode = _doFindAll(cNode, cb, bsz, bs, bidx, results, _doSingleByteSearchM);
                         if (!cNode) { return std::move(results); }
                         break;
@@ -976,22 +923,10 @@ namespace trie {
     inline static void AddNgram(TrieRoot_t *trie, const std::string& s, int opIdx) {
         //std::cerr << "a::" << s << std::endl;
         auto cNode = cy::trie::AddString(&trie->MemoryPool, trie->Root, s);
-        //cNode.L->State.MarkAdd(opIdx);
-#ifdef LPDEBUG
-        //if (cNode != cy::trie::SearchString(trie->Root, s)) {
-        //    std::cerr << "add or find is wrong!" << std::endl;
-        //    abort();
-        //}
-#endif
-        //cy::trie::AddString(&trie->MemoryPool, trie->Root, s);
     }
 
     inline static void RemoveNgram(TrieRoot_t*trie, const std::string& s, int opIdx) {
         //std::cerr << "rem::" << s << std::endl;
-        //auto cNode = cy::trie::FindString(trie->Root, s);
-        //if (cNode) {
-        //    cNode.L->State.MarkDel(opIdx);
-        //}
         cy::trie::DelString(trie->Root, s);
     }
 
