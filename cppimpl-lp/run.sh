@@ -3,7 +3,7 @@
 DIR=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
 
 #NUM_THREADS=$( grep -e "siblings" /proc/cpuinfo | sed 's/^.*: \([0-9]\+\)$/\1/' | head -n1 )
-NUM_THREADS=2
+NUM_THREADS=8
 
 #THREAD_AFFINITIES="0,2,"
 THREAD_AFFINITIES=""
@@ -13,7 +13,6 @@ while [ "$i" -lt "$NUM_THREADS" ]; do
     i=$(($i + 1))
 done
 THREAD_AFFINITIES=$( echo "$TA" | sed 's/\(.*\)\,$/\1/' )
-THREAD_AFFINITIES="0,1,2,3"
 #echo $THREAD_AFFINITIES
 
 # OpenMP configuration

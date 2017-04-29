@@ -48,7 +48,7 @@ namespace trie {
     constexpr size_t TYPE_X_DEPTH = 24;
 
     constexpr size_t MEMORY_POOL_BLOCK_SIZE_S = 1<<25;
-    constexpr size_t MEMORY_POOL_BLOCK_SIZE_M = 1<<20;
+    constexpr size_t MEMORY_POOL_BLOCK_SIZE_M = 1<<10;
     constexpr size_t MEMORY_POOL_BLOCK_SIZE_L = 1<<10;
     constexpr size_t MEMORY_POOL_BLOCK_SIZE_X = 1<<10;
 
@@ -211,7 +211,7 @@ namespace trie {
     static inline NodePtr _newTrieNodeX(MemoryPool_t*mem) {
         return mem->_newNodeX();
     }
-    static inline NodePtr _newTrieNode(MemoryPool_t*mem, size_t depth = 0) {
+    static inline NodePtr _newTrieNodeWithX(MemoryPool_t*mem, size_t depth = 0) {(void)depth;
 #ifdef USE_TYPE_X
         if (depth < TYPE_X_DEPTH) {
             return _newTrieNodeS(mem);
@@ -222,6 +222,9 @@ namespace trie {
 #endif
     }
 
+    static inline NodePtr _newTrieNode(MemoryPool_t*mem) {
+        return _newTrieNodeS(mem);
+    }
 
     ////////////////////////////
 
@@ -435,7 +438,7 @@ namespace trie {
         if (cNode->Suffix.empty()) { // We just need to check children
             NodePtr nextNode = _doSingleByteSearch(cNode, cb); // Generic call
             if (!nextNode) {
-                nextNode = _newTrieNode(mem, bidx);
+                nextNode = _newTrieNode(mem);
                 if (bidx+1 < bsz) { // this is NOT the last byte so add the remaining as suffix
                     nextNode.L->Suffix = std::move(std::string(bs+bidx+1, bs+bsz));
                     *done = true;
@@ -468,10 +471,10 @@ namespace trie {
             // then in the for loop use the type S add since all the others are new nodes.
             NodePtr nextNode = cNode;
             if (common > 0) {
-                nextNode = _doSingleByteAdd(nextNode, sufbs[0], _newTrieNode(mem, bidx), pb, parent, mem); // Generic call
+                nextNode = _doSingleByteAdd(nextNode, sufbs[0], _newTrieNode(mem), pb, parent, mem); // Generic call
             }
             for (size_t sidx=1; sidx<common; ++sidx) {
-                nextNode = _doSingleByteAddS(nextNode, sufbs[sidx], _newTrieNode(mem, bidx+sidx), pb, parent, mem);
+                nextNode = _doSingleByteAddS(nextNode, sufbs[sidx], _newTrieNode(mem), pb, parent, mem);
             }
             nextNode.S->Valid = true; // this is for the existing ngram
             nextNode.S->Suffix = std::move(std::string((char*)bs+bidx+common, (char*)bs+bsz)); // the new ngram
@@ -489,17 +492,17 @@ namespace trie {
         // then in the for loop use the type S add since all the others are new nodes.
         NodePtr nextNode = cNode;
         if (common > 0) {
-            nextNode = _doSingleByteAdd(nextNode, sufbs[0], _newTrieNode(mem, bidx), pb, parent, mem); // Generic call
+            nextNode = _doSingleByteAdd(nextNode, sufbs[0], _newTrieNode(mem), pb, parent, mem); // Generic call
         }
         for (size_t sidx=1; sidx<common; ++sidx) {
-            nextNode = _doSingleByteAddS(nextNode, sufbs[sidx], _newTrieNode(mem, bidx+sidx), pb, parent, mem);
+            nextNode = _doSingleByteAddS(nextNode, sufbs[sidx], _newTrieNode(mem), pb, parent, mem);
         }
         // add the remaining of the existing ngram
         NodePtr newNode;
         if (common > 0) {
-            newNode = _doSingleByteAddS(nextNode, sufbs[common], _newTrieNode(mem, bidx+common), pb, parent, mem);
+            newNode = _doSingleByteAddS(nextNode, sufbs[common], _newTrieNode(mem), pb, parent, mem);
         } else {
-            newNode = _doSingleByteAdd(nextNode, sufbs[common], _newTrieNode(mem, bidx+common), pb, parent, mem); // Generic call
+            newNode = _doSingleByteAdd(nextNode, sufbs[common], _newTrieNode(mem), pb, parent, mem); // Generic call
         }
         if (common+1 == sufsz) {
             // there was only 1 byte remaining and it was added through a new node.
@@ -511,9 +514,9 @@ namespace trie {
         // add the remaining of the new ngram
         if (bidx+common < bsz) {
             if (common > 0) {
-                newNode = _doSingleByteAddS(nextNode, bs[bidx+common], _newTrieNode(mem, bidx+common), pb, parent, mem);
+                newNode = _doSingleByteAddS(nextNode, bs[bidx+common], _newTrieNode(mem), pb, parent, mem);
             } else {
-                newNode = _doSingleByteAdd(nextNode, bs[bidx+common], _newTrieNode(mem, bidx+common), pb, parent, mem); // Generic call
+                newNode = _doSingleByteAdd(nextNode, bs[bidx+common], _newTrieNode(mem), pb, parent, mem); // Generic call
             }
             if (bidx+common+1 == bsz) {
                 // there was only 1 byte remaining and it was added through a new node.
